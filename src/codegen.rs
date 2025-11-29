@@ -3,6 +3,7 @@ use anyhow::{Result, Context};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 pub struct CodeGenerator;
 
@@ -200,6 +201,12 @@ impl CodeGenerator {
             output.push_str(&self.generate_function(f, 0));
         }
         
+        // Generate system scheduler if there are any systems with attributes
+        let system_functions = self.collect_system_functions(&program);
+        if !system_functions.is_empty() {
+            output.push_str(&self.generate_system_scheduler(&system_functions)?);
+        }
+        
         // Add C++ main wrapper if HEIDIC main exists
         if has_main {
             output.push_str("int main(int argc, char* argv[]) {\n");
@@ -207,6 +214,131 @@ impl CodeGenerator {
             output.push_str("    return 0;\n");
             output.push_str("}\n");
         }
+        
+        Ok(output)
+    }
+    
+    fn collect_system_functions(&self, program: &Program) -> Vec<(String, FunctionDef)> {
+        let mut system_functions = Vec::new();
+        
+        for item in &program.items {
+            match item {
+                Item::Function(f) => {
+                    if let Some(attr) = &f.attribute {
+                        system_functions.push((attr.name.clone(), f.clone()));
+                    }
+                }
+                Item::System(s) => {
+                    for func in &s.functions {
+                        if let Some(attr) = &func.attribute {
+                            system_functions.push((attr.name.clone(), func.clone()));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        
+        system_functions
+    }
+    
+    fn generate_system_scheduler(&self, system_functions: &[(String, FunctionDef)]) -> Result<String> {
+        let mut output = String::new();
+        
+        // Build dependency graph
+        let mut system_map: HashMap<String, SystemAttribute> = HashMap::new();
+        let mut system_names = HashSet::new();
+        
+        for (name, func) in system_functions {
+            if let Some(attr) = &func.attribute {
+                system_map.insert(name.clone(), attr.clone());
+                system_names.insert(name.clone());
+            }
+        }
+        
+        // Build adjacency list for topological sort
+        // For each system, track what must run before it (after dependencies)
+        let mut in_degree: HashMap<String, usize> = HashMap::new();
+        let mut graph: HashMap<String, Vec<String>> = HashMap::new();
+        
+        // Initialize in_degree for all systems
+        for name in &system_names {
+            in_degree.insert(name.clone(), 0);
+            graph.insert(name.clone(), Vec::new());
+        }
+        
+        // Build graph from dependencies
+        for (name, attr) in &system_map {
+            // 'after' means this system must run AFTER the listed systems
+            // So those systems are dependencies (edges point from dependency to this system)
+            for dep in &attr.after {
+                graph.entry(dep.clone()).or_insert_with(Vec::new).push(name.clone());
+                *in_degree.entry(name.clone()).or_insert(0) += 1;
+            }
+            
+            // 'before' means this system must run BEFORE the listed systems
+            // So this system is a dependency of those systems (edges point from this to those)
+            for dep in &attr.before {
+                graph.entry(name.clone()).or_insert_with(Vec::new).push(dep.clone());
+                *in_degree.entry(dep.clone()).or_insert(0) += 1;
+            }
+        }
+        
+        // Topological sort using Kahn's algorithm
+        let mut queue = VecDeque::new();
+        for (name, degree) in &in_degree {
+            if *degree == 0 {
+                queue.push_back(name.clone());
+            }
+        }
+        
+        let mut sorted_systems = Vec::new();
+        while let Some(current) = queue.pop_front() {
+            sorted_systems.push(current.clone());
+            
+            if let Some(neighbors) = graph.get(&current) {
+                for neighbor in neighbors {
+                    let degree = in_degree.get_mut(neighbor).unwrap();
+                    *degree -= 1;
+                    if *degree == 0 {
+                        queue.push_back(neighbor.clone());
+                    }
+                }
+            }
+        }
+        
+        // Generate scheduler function
+        output.push_str("// System Scheduler - runs systems in dependency order\n");
+        output.push_str("void run_systems() {\n");
+        
+        for system_name in &sorted_systems {
+            // Find the function for this system
+            if let Some((_, func)) = system_functions.iter().find(|(name, _)| name == system_name) {
+                // Generate call to the system function
+                // For now, we'll need to handle query parameters - this is simplified
+                output.push_str(&format!("    {}(", func.name));
+                
+                // Generate arguments - for query types, we'll need to pass query structs
+                // This is a simplified version - in a real implementation, you'd need to
+                // build the query structs from the ECS registry
+                for (i, param) in func.params.iter().enumerate() {
+                    if i > 0 {
+                        output.push_str(", ");
+                    }
+                    // For query types, we'd need to construct the query from the ECS
+                    // For now, we'll generate a placeholder comment
+                    if matches!(param.ty, Type::Query(_)) {
+                        output.push_str(&format!("/* TODO: construct query<...> from ECS */"));
+                    } else {
+                        output.push_str(&format!("/* TODO: {} */", param.name));
+                    }
+                }
+                
+                output.push_str(");\n");
+            }
+        }
+        
+        output.push_str("}\n\n");
         
         Ok(output)
     }

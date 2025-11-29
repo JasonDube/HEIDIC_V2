@@ -8,11 +8,6 @@ This document tracks language feature improvements and enhancements for HEIDIC_v
 
 ## Pending 📋
 
-- [ ] **System Dependency Declaration** - `@system(render, after = Physics, before = RenderSubmit)`
-  - Status: Not started
-  - Priority: High
-  - Effort: ~2-3 days
-
 - [x] **Query Syntax Enhancement** - `query<Transform, Velocity>` for ECS
   - Status: ✅ Completed
   - Implementation: Added `Query(Vec<Type>)` to AST, parser support for `query<T1, T2, ...>` syntax, type checker validation (ensures query contains Component/ComponentSOA types), and codegen that generates query structs with iteration helpers
@@ -50,6 +45,13 @@ This document tracks language feature improvements and enhancements for HEIDIC_v
   - Syntax: `component_soa Velocity { x: [f32], y: [f32], z: [f32] }`
 
 ## Completed ✅
+
+- [x] **System Dependency Declaration** - `@system(render, after = Physics, before = RenderSubmit)`
+  - Status: ✅ Completed
+  - Implementation: Added `@` token to lexer, `SystemAttribute` to AST with `after`/`before` dependencies, parser support for `@system(...)` attributes on functions, type checker validation (checks for undefined systems and circular dependencies), and codegen that generates a `run_systems()` scheduler function using topological sort
+  - Syntax: `@system(render, after = Physics, before = RenderSubmit) fn update_transforms(q: query<Position, Velocity>): void { }`
+  - Generated as: `run_systems()` function that calls systems in dependency order using Kahn's algorithm for topological sorting
+  - Features: Validates all referenced systems exist, detects circular dependencies, generates ordered system execution
 
 - [x] **SOA (Structure of Arrays) Support** - `mesh_soa` and `component_soa` keywords
   - Status: ✅ Completed

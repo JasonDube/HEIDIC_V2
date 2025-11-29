@@ -1,6 +1,6 @@
 use crate::ast::*;
 use anyhow::{Result, bail};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub struct TypeChecker {
     symbols: HashMap<String, Type>,
@@ -72,6 +72,7 @@ impl TypeChecker {
                         params: ext.params.clone(),
                         return_type: ext.return_type.clone(),
                         body: Vec::new(), // Extern functions have no body
+                        attribute: None, // Extern functions don't have attributes
                     };
                     self.functions.insert(ext.name.clone(), func_def);
                 }
@@ -86,7 +87,10 @@ impl TypeChecker {
             }
         }
         
-        // Second pass: type check
+        // Second pass: validate system dependencies
+        self.validate_system_dependencies(&program)?;
+        
+        // Third pass: type check
         for item in &program.items {
             match item {
                 Item::Function(f) => {
@@ -101,6 +105,100 @@ impl TypeChecker {
             }
         }
         
+        Ok(())
+    }
+    
+    fn validate_system_dependencies(&self, program: &Program) -> Result<()> {
+        // Collect all system names and their dependencies
+        let mut system_names = HashSet::new();
+        let mut system_deps: HashMap<String, (Vec<String>, Vec<String>)> = HashMap::new();
+        
+        // First, collect all system names from attributes
+        for item in &program.items {
+            match item {
+                Item::Function(f) => {
+                    if let Some(attr) = &f.attribute {
+                        system_names.insert(attr.name.clone());
+                        system_deps.insert(attr.name.clone(), (attr.after.clone(), attr.before.clone()));
+                    }
+                }
+                Item::System(s) => {
+                    for func in &s.functions {
+                        if let Some(attr) = &func.attribute {
+                            system_names.insert(attr.name.clone());
+                            system_deps.insert(attr.name.clone(), (attr.after.clone(), attr.before.clone()));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        
+        // Validate that all referenced systems exist
+        for (system_name, (after, before)) in &system_deps {
+            for dep_name in after {
+                if !system_names.contains(dep_name) {
+                    bail!("System '{}' references undefined system '{}' in 'after' clause", system_name, dep_name);
+                }
+            }
+            for dep_name in before {
+                if !system_names.contains(dep_name) {
+                    bail!("System '{}' references undefined system '{}' in 'before' clause", system_name, dep_name);
+                }
+            }
+        }
+        
+        // Check for circular dependencies using DFS
+        for system_name in &system_names {
+            self.check_circular_dependency(system_name, &system_deps, &mut HashSet::new(), &mut Vec::new())?;
+        }
+        
+        Ok(())
+    }
+    
+    fn check_circular_dependency(
+        &self,
+        current: &String,
+        deps: &HashMap<String, (Vec<String>, Vec<String>)>,
+        visited: &mut HashSet<String>,
+        path: &mut Vec<String>,
+    ) -> Result<()> {
+        if path.contains(current) {
+            let cycle_start = path.iter().position(|s| s == current).unwrap();
+            let cycle: Vec<String> = path[cycle_start..].iter().chain(std::iter::once(current)).cloned().collect();
+            bail!("Circular dependency detected: {}", cycle.join(" -> "));
+        }
+        
+        if visited.contains(current) {
+            return Ok(());
+        }
+        
+        visited.insert(current.clone());
+        path.push(current.clone());
+        
+        if let Some((after, before)) = deps.get(current) {
+            // Check 'after' dependencies (systems that must run before this one)
+            for dep in after {
+                self.check_circular_dependency(dep, deps, visited, path)?;
+            }
+            // Check 'before' dependencies (systems that must run after this one)
+            // This creates reverse dependencies
+            for dep in before {
+                // If A must run before B, then B must run after A
+                // So we need to check if any system that has 'after = current' also has 'before = dep'
+                // This is a bit complex, but we can simplify by checking if dep has current in its 'after' list
+                if let Some((dep_after, _)) = deps.get(dep) {
+                    if dep_after.contains(current) {
+                        // This is fine, it's a direct dependency
+                    } else {
+                        // Check if there's an indirect cycle
+                        self.check_circular_dependency(dep, deps, visited, path)?;
+                    }
+                }
+            }
+        }
+        
+        path.pop();
         Ok(())
     }
     

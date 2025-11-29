@@ -1,0 +1,34 @@
+// Test System Dependency Declaration
+
+component Position {
+    x: f32,
+    y: f32,
+    z: f32
+}
+
+component Velocity {
+    x: f32,
+    y: f32,
+    z: f32
+}
+
+// System with dependency declaration
+@system(render, after = Physics, before = RenderSubmit)
+fn update_transforms(q: query<Position, Velocity>): void {
+    print("Update transforms system\n");
+}
+
+@system(physics)
+fn physics_system(q: query<Position, Velocity>): void {
+    print("Physics system\n");
+}
+
+@system(rendersubmit)
+fn render_submit(): void {
+    print("Render submit system\n");
+}
+
+fn main(): void {
+    print("System dependency test\n");
+}
+

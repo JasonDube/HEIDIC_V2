@@ -218,6 +218,57 @@ fn main(): void {
 
 ---
 
+### System Dependency Declaration
+
+Systems can declare execution order dependencies using the `@system` attribute:
+
+**Syntax:**
+```heidic
+@system(system_name, after = Dependency1, before = Dependency2)
+fn system_function(q: query<Component1, Component2>): void {
+    // System implementation
+}
+```
+
+**Parameters:**
+- `system_name`: Name of the system (used for dependency references)
+- `after = SystemName`: Systems that must run before this one
+- `before = SystemName`: Systems that must run after this one
+
+**Example:**
+```heidic
+component Position { x: f32, y: f32, z: f32 }
+component Velocity { x: f32, y: f32, z: f32 }
+
+@system(physics)
+fn physics_system(q: query<Position, Velocity>): void {
+    // Physics updates
+}
+
+@system(render, after = Physics, before = RenderSubmit)
+fn render_system(q: query<Position>): void {
+    // Rendering logic
+}
+
+@system(rendersubmit)
+fn render_submit(): void {
+    // Submit render commands
+}
+```
+
+**Generated Code:**
+The compiler generates a `run_systems()` function that executes systems in dependency order using topological sorting. The compiler validates:
+- All referenced systems exist
+- No circular dependencies exist
+
+**Execution Order:**
+In the example above, systems run in this order:
+1. `physics_system` (no dependencies)
+2. `render_system` (after Physics)
+3. `render_submit` (after render, which is after Physics)
+
+---
+
 ## Syntax
 
 ### Variables

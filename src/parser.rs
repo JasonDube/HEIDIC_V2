@@ -209,7 +209,44 @@ impl Parser {
         }
         self.expect(&Token::RBrace)?;
         
-        Ok(SystemDef { name, functions })
+        Ok(SystemDef { name, functions, attribute: None })
+    }
+    
+    fn parse_system_attribute(&mut self) -> Result<SystemAttribute> {
+        self.expect(&Token::LParen)?;
+        
+        // Parse system name (first argument)
+        let name = self.expect_ident()?;
+        let mut after = Vec::new();
+        let mut before = Vec::new();
+        
+        // Parse optional after/before clauses
+        while self.check(&Token::Comma) {
+            self.advance(); // consume comma
+            
+            // Check for "after" or "before"
+            if let Token::Ident(ref keyword) = *self.peek() {
+                if keyword == "after" {
+                    self.advance();
+                    self.expect(&Token::Eq)?;
+                    let system_name = self.expect_ident()?;
+                    after.push(system_name);
+                } else if keyword == "before" {
+                    self.advance();
+                    self.expect(&Token::Eq)?;
+                    let system_name = self.expect_ident()?;
+                    before.push(system_name);
+                } else {
+                    bail!("Expected 'after' or 'before' in @system attribute, got {}", keyword);
+                }
+            } else {
+                break; // No more attributes
+            }
+        }
+        
+        self.expect(&Token::RParen)?;
+        
+        Ok(SystemAttribute { name, after, before })
     }
     
     fn parse_extern_function(&mut self) -> Result<ExternFunctionDef> {
@@ -272,6 +309,23 @@ impl Parser {
     }
     
     fn parse_function(&mut self) -> Result<FunctionDef> {
+        // Parse optional @system attribute
+        let attribute = if self.check(&Token::At) {
+            self.advance();
+            if let Token::Ident(ref attr_name) = *self.peek() {
+                if attr_name == "system" {
+                    self.advance();
+                    Some(self.parse_system_attribute()?)
+                } else {
+                    bail!("Unknown attribute: @{}", attr_name);
+                }
+            } else {
+                bail!("Expected attribute name after @");
+            }
+        } else {
+            None
+        };
+        
         let name = self.expect_ident()?;
         self.expect(&Token::LParen)?;
         
@@ -308,6 +362,7 @@ impl Parser {
             params,
             return_type,
             body,
+            attribute,
         })
     }
     

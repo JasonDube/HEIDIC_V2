@@ -108,9 +108,17 @@ pub struct ShaderDef {
 }
 
 #[derive(Debug, Clone)]
+pub struct SystemAttribute {
+    pub name: String, // System name (e.g., "render")
+    pub after: Vec<String>, // Systems that must run before this one
+    pub before: Vec<String>, // Systems that must run after this one
+}
+
+#[derive(Debug, Clone)]
 pub struct SystemDef {
     pub name: String,
     pub functions: Vec<FunctionDef>,
+    pub attribute: Option<SystemAttribute>, // Optional @system attribute
 }
 
 #[derive(Debug, Clone)]
@@ -126,6 +134,7 @@ pub struct FunctionDef {
     pub params: Vec<Param>,
     pub return_type: Type,
     pub body: Vec<Statement>,
+    pub attribute: Option<SystemAttribute>, // Optional @system attribute
 }
 
 #[derive(Debug, Clone)]

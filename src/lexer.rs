@@ -192,6 +192,8 @@ pub enum Token {
     Semicolon,
     #[token(".")]
     Dot,
+    #[token("@")]
+    At,
 }
 
 pub struct Lexer {
