@@ -1,0 +1,27 @@
+// Test ECS Query Syntax
+
+component Position {
+    x: f32,
+    y: f32,
+    z: f32
+}
+
+component Velocity {
+    x: f32,
+    y: f32,
+    z: f32
+}
+
+// Function that takes a query
+fn update_transforms(q: query<Position, Velocity>): void {
+    // Query type is validated - must contain Component or ComponentSOA types
+    print("Query function defined\n");
+}
+
+fn main(): void {
+    print("ECS Query syntax test\n");
+    // In a full implementation, you would use the query like:
+    // let q: query<Position, Velocity> = create_query();
+    // for entity in q { ... }
+}
+

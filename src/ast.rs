@@ -12,6 +12,7 @@ pub enum Type {
     MeshSOA(String),
     ComponentSOA(String),
     Shader(String),
+    Query(Vec<Type>), // query<Component1, Component2, ...>
     Void,
     // Vulkan types
     VkInstance,

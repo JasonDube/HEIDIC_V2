@@ -109,6 +109,10 @@ impl TypeChecker {
         
         // Add parameters to symbol table
         for param in &func.params {
+            // Validate query types in parameters
+            if let Type::Query(_) = &param.ty {
+                self.validate_query_type(&param.ty)?;
+            }
             self.symbols.insert(param.name.clone(), param.ty.clone());
         }
         
@@ -125,6 +129,10 @@ impl TypeChecker {
             Statement::Let { name, ty, value } => {
                 let value_type = self.check_expression(value)?;
                 if let Some(declared_type) = ty {
+                    // Validate query types
+                    if let Type::Query(_) = declared_type {
+                        self.validate_query_type(declared_type)?;
+                    }
                     if !self.types_compatible(declared_type, &value_type) {
                         bail!("Type mismatch: expected {:?}, got {:?}", declared_type, value_type);
                     }
@@ -429,6 +437,12 @@ impl TypeChecker {
             (Type::MeshSOA(a), Type::MeshSOA(b)) => a == b,
             (Type::ComponentSOA(a), Type::ComponentSOA(b)) => a == b,
             (Type::Shader(a), Type::Shader(b)) => a == b,
+            (Type::Query(a_types), Type::Query(b_types)) => {
+                if a_types.len() != b_types.len() {
+                    return false;
+                }
+                a_types.iter().zip(b_types.iter()).all(|(a, b)| self.types_compatible(a, b))
+            }
             // Vulkan types
             (Type::VkInstance, Type::VkInstance) => true,
             (Type::VkDevice, Type::VkDevice) => true,
@@ -459,6 +473,34 @@ impl TypeChecker {
             (Type::Mat4, Type::Mat4) => true,
             _ => false,
         }
+    }
+    
+    fn validate_query_type(&self, query_type: &Type) -> Result<()> {
+        if let Type::Query(component_types) = query_type {
+            if component_types.is_empty() {
+                bail!("Query type must have at least one component type");
+            }
+            
+            // Validate that all types in query are Component or ComponentSOA types
+            // Also allow Struct types if they match a Component name
+            for comp_type in component_types {
+                match comp_type {
+                    Type::Component(_) | Type::ComponentSOA(_) => {
+                        // Valid component type
+                    }
+                    Type::Struct(name) => {
+                        // Check if this struct name matches a component
+                        if !self.components.contains_key(name) && !self.component_soas.contains_key(name) {
+                            bail!("Query type can only contain Component or ComponentSOA types. '{}' is not a component", name);
+                        }
+                    }
+                    _ => {
+                        bail!("Query type can only contain Component or ComponentSOA types, got {:?}", comp_type);
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 

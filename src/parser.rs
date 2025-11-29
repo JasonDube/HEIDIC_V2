@@ -457,6 +457,23 @@ impl Parser {
                 self.expect(&Token::RBracket)?;
                 Ok(Type::Array(Box::new(element_type)))
             }
+            Token::Query => {
+                self.advance();
+                self.expect(&Token::Lt)?;
+                let mut component_types = Vec::new();
+                
+                // Parse first component type
+                component_types.push(self.parse_type()?);
+                
+                // Parse additional component types
+                while self.check(&Token::Comma) {
+                    self.advance();
+                    component_types.push(self.parse_type()?);
+                }
+                
+                self.expect(&Token::Gt)?;
+                Ok(Type::Query(component_types))
+            }
             _ => bail!("Unexpected token in type: {:?}", self.peek()),
         }
     }

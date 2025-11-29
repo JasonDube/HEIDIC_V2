@@ -140,6 +140,38 @@ type DescriptorSet = VkDescriptorSet;
 type CommandBuffer = VkCommandBuffer;
 ```
 
+### Query Types (ECS)
+
+Query types allow you to query entities that have specific components:
+
+```heidic
+component Position {
+    x: f32,
+    y: f32,
+    z: f32
+}
+
+component Velocity {
+    x: f32,
+    y: f32,
+    z: f32
+}
+
+fn update_transforms(q: query<Position, Velocity>): void {
+    // Query for entities with both Position and Velocity components
+}
+```
+
+**Syntax:** `query<Component1, Component2, ...>`
+
+**Requirements:**
+- All types in the query must be Component or ComponentSOA types
+- At least one component type is required
+
+**Generated Code:**
+- Creates a `Query_Component1_Component2_...` struct
+- Generates a `for_each_query_component1_component2_...()` helper function for iteration
+
 ### Shaders (Compile-Time Embedding)
 
 Shaders are compiled to SPIR-V at compile-time and embedded in the generated C++ code:
@@ -647,5 +679,5 @@ The generated C++ code requires:
 
 ---
 
-*Last updated: HEIDIC v2 with SOA support and compile-time shader embedding*
+*Last updated: HEIDIC v2 with SOA support, compile-time shader embedding, and ECS query syntax*
 

@@ -55,6 +55,39 @@ impl CodeGenerator {
             output.push_str("\n");
         }
         
+        // Generate query types (ECS query structures)
+        let mut query_types = Vec::new();
+        for item in &program.items {
+            self.collect_query_types(item, &mut query_types);
+        }
+        
+        // Remove duplicates (simple comparison)
+        query_types.sort_by(|a, b| {
+            let a_str = format!("{:?}", a);
+            let b_str = format!("{:?}", b);
+            a_str.cmp(&b_str)
+        });
+        query_types.dedup_by(|a, b| {
+            if a.len() != b.len() {
+                return false;
+            }
+            a.iter().zip(b.iter()).all(|(x, y)| {
+                match (x, y) {
+                    (Type::Component(a_name), Type::Component(b_name)) => a_name == b_name,
+                    (Type::ComponentSOA(a_name), Type::ComponentSOA(b_name)) => a_name == b_name,
+                    _ => false,
+                }
+            })
+        });
+        
+        if !query_types.is_empty() {
+            output.push_str("// ECS Query Types\n");
+            for query_type in &query_types {
+                output.push_str(&self.generate_query_type(query_type)?);
+            }
+            output.push_str("\n");
+        }
+        
         // Generate structs, components, and SOA types
         for item in &program.items {
             match item {
@@ -569,6 +602,19 @@ impl CodeGenerator {
             Type::Vec4 => "Vec4".to_string(),
             Type::Mat4 => "Mat4".to_string(),
             Type::Shader(name) => name.clone(),
+            Type::Query(component_types) => {
+                // Generate query type name: Query_Component1_Component2_...
+                let type_names: Vec<String> = component_types.iter()
+                    .map(|t| {
+                        match t {
+                            Type::Component(name) | Type::ComponentSOA(name) => name.clone(),
+                            Type::Struct(name) => name.clone(), // Struct name used as component name
+                            _ => format!("Unknown"),
+                        }
+                    })
+                    .collect();
+                format!("Query_{}", type_names.join("_"))
+            }
         }
     }
     
@@ -676,6 +722,98 @@ impl CodeGenerator {
         } else {
             anyhow::bail!("Shader file not found: {}", shader.path);
         }
+        
+        Ok(output)
+    }
+    
+    fn collect_query_types(&self, item: &Item, query_types: &mut Vec<Vec<Type>>) {
+        match item {
+            Item::Function(f) => {
+                // Check parameters
+                for param in &f.params {
+                    if let Type::Query(component_types) = &param.ty {
+                        query_types.push(component_types.clone());
+                    }
+                }
+                // Check return type
+                if let Type::Query(component_types) = &f.return_type {
+                    query_types.push(component_types.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    
+    fn generate_query_type(&self, component_types: &Vec<Type>) -> Result<String> {
+        let mut output = String::new();
+        
+        // Generate query struct name
+        let type_names: Vec<String> = component_types.iter()
+            .map(|t| {
+                match t {
+                    Type::Component(name) | Type::ComponentSOA(name) => name.clone(),
+                    Type::Struct(name) => name.clone(), // Struct name used as component name
+                    _ => "Unknown".to_string(),
+                }
+            })
+            .collect();
+        let query_name = format!("Query_{}", type_names.join("_"));
+        
+        // Generate query struct
+        output.push_str(&format!("// ECS Query for components: {}\n", type_names.join(", ")));
+        output.push_str(&format!("struct {} {{\n", query_name));
+        
+        // For each component type, add a reference to its storage
+        for (i, comp_type) in component_types.iter().enumerate() {
+            let comp_name = match comp_type {
+                Type::Component(name) | Type::ComponentSOA(name) => name.clone(),
+                Type::Struct(name) => name.clone(), // Struct name used as component name
+                _ => format!("Component{}", i),
+            };
+            
+            // Generate a simple iterator/storage reference
+            output.push_str(&format!("    std::vector<{}>* {}_components;\n", comp_name, comp_name.to_lowercase()));
+        }
+        
+        output.push_str(&format!("    size_t count;  // Number of entities with all components\n"));
+        output.push_str("};\n\n");
+        
+        // Generate helper function to iterate over query
+        output.push_str(&format!("// Helper to iterate over {} query\n", query_name));
+        output.push_str(&format!("template<typename Func>\n"));
+        output.push_str(&format!("void for_each_{}({}& query, Func func) {{\n", 
+            query_name.to_lowercase(), query_name));
+        output.push_str("    for (size_t i = 0; i < query.count; ++i) {\n");
+        
+        // Generate entity access code
+        output.push_str("        // Access components for entity i\n");
+        for (i, comp_type) in component_types.iter().enumerate() {
+            let comp_name = match comp_type {
+                Type::Component(name) | Type::ComponentSOA(name) => name.clone(),
+                Type::Struct(name) => name.clone(), // Struct name used as component name
+                _ => format!("Component{}", i),
+            };
+            let var_name = comp_name.to_lowercase();
+            output.push_str(&format!("        {}& {} = (*query.{}_components)[i];\n", 
+                comp_name, var_name, var_name));
+        }
+        
+        output.push_str("        // Call function with entity components\n");
+        output.push_str("        func(");
+        for (i, comp_type) in component_types.iter().enumerate() {
+            if i > 0 {
+                output.push_str(", ");
+            }
+            let comp_name = match comp_type {
+                Type::Component(ref name) | Type::ComponentSOA(ref name) => name.to_lowercase(),
+                Type::Struct(ref name) => name.to_lowercase(), // Struct name used as component name
+                _ => format!("component{}", i),
+            };
+            output.push_str(&comp_name);
+        }
+        output.push_str(");\n");
+        output.push_str("    }\n");
+        output.push_str("}\n\n");
         
         Ok(output)
     }

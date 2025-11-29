@@ -13,10 +13,12 @@ This document tracks language feature improvements and enhancements for HEIDIC_v
   - Priority: High
   - Effort: ~2-3 days
 
-- [ ] **Query Syntax Enhancement** - `query<Transform, Velocity>` for ECS
-  - Status: Not started
-  - Priority: High
-  - Effort: ~1-2 days
+- [x] **Query Syntax Enhancement** - `query<Transform, Velocity>` for ECS
+  - Status: ✅ Completed
+  - Implementation: Added `Query(Vec<Type>)` to AST, parser support for `query<T1, T2, ...>` syntax, type checker validation (ensures query contains Component/ComponentSOA types), and codegen that generates query structs with iteration helpers
+  - Syntax: `fn update(q: query<Position, Velocity>): void { }`
+  - Generated as: `Query_Position_Velocity` struct with `for_each_query_position_velocity()` helper function
+  - Note: Full `for entity in q` iteration syntax can be added later as an enhancement
 
 - [x] **Compile-Time Shader Embedding** - `shader vertex "shaders/triangle.vert"`
   - Status: ✅ Completed
