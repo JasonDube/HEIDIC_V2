@@ -1,0 +1,16 @@
+// Test Frame-Scoped Memory (FrameArena)
+
+fn render_frame(frame: FrameArena): void {
+    let entity_count: i32 = 100;
+    let positions = frame.alloc_array<Vec3>(entity_count);
+    let velocities = frame.alloc_array<Vec3>(entity_count);
+    
+    print("Allocated arrays from frame arena\n");
+}
+
+fn main(): void {
+    let frame: FrameArena;
+    render_frame(frame);
+    print("Frame arena test complete\n");
+}
+

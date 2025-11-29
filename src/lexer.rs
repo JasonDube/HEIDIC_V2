@@ -122,6 +122,8 @@ pub enum Token {
     Vec4,
     #[token("Mat4")]
     Mat4,
+    #[token("FrameArena")]
+    FrameArena,
     
     // Literals
     #[regex(r"-?\d+", |lex| lex.slice().parse().ok())]

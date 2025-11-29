@@ -501,6 +501,10 @@ impl Parser {
                 self.advance();
                 Ok(Type::Mat4)
             }
+            Token::FrameArena => {
+                self.advance();
+                Ok(Type::FrameArena)
+            }
             Token::Ident(ref name) => {
                 let name_clone = name.clone();
                 self.advance();
@@ -829,10 +833,71 @@ impl Parser {
             } else if self.check(&Token::Dot) {
                 self.advance();
                 let member = self.expect_ident()?;
-                expr = Expression::MemberAccess {
-                    object: Box::new(expr),
-                    member,
-                };
+                
+                // Check if this is a method call with type arguments: frame.alloc_array<Vec3>(count)
+                if self.check(&Token::Lt) {
+                    // Parse type arguments
+                    self.advance(); // consume '<'
+                    let mut type_args = Vec::new();
+                    type_args.push(self.parse_type()?);
+                    while self.check(&Token::Comma) {
+                        self.advance();
+                        type_args.push(self.parse_type()?);
+                    }
+                    self.expect(&Token::Gt)?; // consume '>'
+                    
+                    // Now expect function call
+                    if self.check(&Token::LParen) {
+                        self.advance();
+                        let mut args = Vec::new();
+                        if !self.check(&Token::RParen) {
+                            loop {
+                                args.push(self.parse_expression()?);
+                                if !self.check(&Token::Comma) {
+                                    break;
+                                }
+                                self.advance();
+                            }
+                        }
+                        self.expect(&Token::RParen)?;
+                        
+                        expr = Expression::MethodCall {
+                            object: Box::new(expr),
+                            method: member,
+                            type_args: Some(type_args),
+                            args,
+                        };
+                    } else {
+                        bail!("Expected '(' after method name with type arguments");
+                    }
+                } else if self.check(&Token::LParen) {
+                    // Regular method call without type arguments
+                    self.advance();
+                    let mut args = Vec::new();
+                    if !self.check(&Token::RParen) {
+                        loop {
+                            args.push(self.parse_expression()?);
+                            if !self.check(&Token::Comma) {
+                                break;
+                            }
+                            self.advance();
+                        }
+                    }
+                    self.expect(&Token::RParen)?;
+                    
+                    expr = Expression::MethodCall {
+                        object: Box::new(expr),
+                        method: member,
+                        type_args: None,
+                        args,
+                    };
+                } else {
+                    // Regular member access
+                    expr = Expression::MemberAccess {
+                        object: Box::new(expr),
+                        member,
+                    };
+                }
             } else if self.check(&Token::LBracket) {
                 self.advance();
                 let index = self.parse_expression()?;

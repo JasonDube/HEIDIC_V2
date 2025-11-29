@@ -269,6 +269,44 @@ In the example above, systems run in this order:
 
 ---
 
+### Frame-Scoped Memory (FrameArena)
+
+FrameArena provides zero-allocation memory management for frame-scoped data:
+
+**Syntax:**
+```heidic
+fn render_frame(frame: FrameArena): void {
+    let entity_count: i32 = 100;
+    let positions = frame.alloc_array<Vec3>(entity_count);
+    let velocities = frame.alloc_array<Vec3>(entity_count);
+    
+    // Use positions and velocities...
+    // All memory automatically freed when frame goes out of scope
+}
+```
+
+**Usage:**
+- `FrameArena` is a type that provides frame-scoped memory allocation
+- `frame.alloc_array<T>(count)` allocates an array of `count` elements of type `T`
+- Returns `std::vector<T>` in generated C++ code
+- All allocations are automatically freed when the `FrameArena` goes out of scope
+
+**Benefits:**
+- Zero-allocation rendering (no heap allocations per frame)
+- Automatic memory management (no manual free/delete)
+- Cache-friendly (stack allocator with block-based allocation)
+
+**Example:**
+```heidic
+fn main(): void {
+    let frame: FrameArena;
+    render_frame(frame);
+    // frame is automatically cleaned up here
+}
+```
+
+---
+
 ## Syntax
 
 ### Variables

@@ -22,10 +22,12 @@ This document tracks language feature improvements and enhancements for HEIDIC_v
   - Generated as: Embedded SPIR-V bytecode arrays with helper functions `load_<name>_shader()` to load them
   - Requirements: glslc must be in PATH
 
-- [ ] **Frame-Scoped Memory (FrameArena)** - `frame.alloc_array<Vec3>(count)`
-  - Status: Not started
-  - Priority: High
-  - Effort: ~3-5 days
+- [x] **Frame-Scoped Memory (FrameArena)** - `frame.alloc_array<Vec3>(count)`
+  - Status: ✅ Completed
+  - Implementation: Added `FrameArena` type to AST and lexer, method call parsing for `frame.alloc_array<T>(count)` syntax, type checker validation, and codegen that generates a C++ FrameArena class with stack allocator
+  - Syntax: `fn render_frame(frame: FrameArena): void { let positions = frame.alloc_array<Vec3>(count); }`
+  - Generated as: C++ `FrameArena` class with `alloc_array<T>(count)` template method that returns `std::vector<T>`
+  - Features: Automatic memory management - all allocations freed when FrameArena goes out of scope
 
 - [ ] **Component Auto-Registration** - Automatic component registry
   - Status: Not started

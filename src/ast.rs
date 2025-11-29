@@ -40,6 +40,8 @@ pub enum Type {
     Vec3,
     Vec4,
     Mat4,
+    // Frame-scoped memory allocator
+    FrameArena,
 }
 
 #[derive(Debug, Clone)]
@@ -171,6 +173,7 @@ pub enum Expression {
     UnaryOp { op: UnaryOp, expr: Box<Expression> },
     Call { name: String, args: Vec<Expression> },
     MemberAccess { object: Box<Expression>, member: String },
+    MethodCall { object: Box<Expression>, method: String, type_args: Option<Vec<Type>>, args: Vec<Expression> }, // frame.alloc_array<Vec3>(count)
     Index { array: Box<Expression>, index: Box<Expression> },
     StructLiteral { name: String, fields: Vec<(String, Expression)> },
 }

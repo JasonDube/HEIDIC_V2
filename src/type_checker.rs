@@ -502,10 +502,36 @@ impl TypeChecker {
                 
                 Ok(func.return_type.clone())
             }
-            Expression::MemberAccess { object, member: _ } => {
-                // Simplified: just check object is valid
-                self.check_expression(object)?;
-                Ok(Type::F32) // Placeholder
+            Expression::MemberAccess { object, member } => {
+                let obj_type = self.check_expression(object)?;
+                // Handle FrameArena member access
+                if matches!(obj_type, Type::FrameArena) {
+                    // FrameArena members are handled in codegen
+                    Ok(Type::Array(Box::new(Type::F32))) // Placeholder - actual type depends on method
+                } else {
+                    // Simplified: just check object is valid
+                    Ok(Type::F32) // Placeholder
+                }
+            }
+            Expression::MethodCall { object, method, type_args, args: _ } => {
+                let obj_type = self.check_expression(object)?;
+                if matches!(obj_type, Type::FrameArena) {
+                    if method == "alloc_array" {
+                        if let Some(ref type_args_vec) = type_args {
+                            if type_args_vec.len() != 1 {
+                                bail!("alloc_array requires exactly one type argument");
+                            }
+                            let element_type = &type_args_vec[0];
+                            Ok(Type::Array(Box::new(element_type.clone())))
+                        } else {
+                            bail!("alloc_array requires type argument: frame.alloc_array<T>(count)");
+                        }
+                    } else {
+                        bail!("Unknown FrameArena method: {}", method);
+                    }
+                } else {
+                    bail!("Method calls only supported on FrameArena, got {:?}", obj_type);
+                }
             }
             Expression::Index { array, index: _ } => {
                 match self.check_expression(array)? {
@@ -569,6 +595,7 @@ impl TypeChecker {
             (Type::Vec3, Type::Vec3) => true,
             (Type::Vec4, Type::Vec4) => true,
             (Type::Mat4, Type::Mat4) => true,
+            (Type::FrameArena, Type::FrameArena) => true,
             _ => false,
         }
     }

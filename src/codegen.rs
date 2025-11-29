@@ -33,6 +33,10 @@ impl CodeGenerator {
         output.push_str("#include \"stdlib/eden_imgui.h\"\n");
         output.push_str("\n");
         
+        // Generate FrameArena allocator implementation
+        output.push_str(&self.generate_frame_arena());
+        output.push_str("\n");
+        
         // Generate type aliases first (so they can be used by structs/components)
         for item in &program.items {
             if let Item::TypeAlias(alias) = item {
@@ -656,6 +660,38 @@ impl CodeGenerator {
                     self.generate_expression(object),
                     member)
             }
+            Expression::MethodCall { object, method, type_args, args } => {
+                if method == "alloc_array" {
+                    // Generate: frame.alloc_array<T>(count)
+                    let obj_expr = self.generate_expression(object);
+                    if let Some(ref type_args_vec) = type_args {
+                        if type_args_vec.len() != 1 {
+                            panic!("alloc_array requires exactly one type argument");
+                        }
+                        let element_type = self.type_to_cpp(&type_args_vec[0]);
+                        let mut arg_strs = Vec::new();
+                        for arg in args {
+                            arg_strs.push(self.generate_expression(arg));
+                        }
+                        format!("{}.alloc_array<{}>({})", obj_expr, element_type, arg_strs.join(", "))
+                    } else {
+                        panic!("alloc_array requires type argument");
+                    }
+                } else {
+                    // Generic method call
+                    let obj_expr = self.generate_expression(object);
+                    let mut arg_strs = Vec::new();
+                    for arg in args {
+                        arg_strs.push(self.generate_expression(arg));
+                    }
+                    if let Some(ref type_args_vec) = type_args {
+                        let type_strs: Vec<String> = type_args_vec.iter().map(|t| self.type_to_cpp(t)).collect();
+                        format!("{}.{}<{}>({})", obj_expr, method, type_strs.join(", "), arg_strs.join(", "))
+                    } else {
+                        format!("{}.{}({})", obj_expr, method, arg_strs.join(", "))
+                    }
+                }
+            }
             Expression::Index { array, index } => {
                 format!("{}[{}]", 
                     self.generate_expression(array),
@@ -747,6 +783,7 @@ impl CodeGenerator {
                     .collect();
                 format!("Query_{}", type_names.join("_"))
             }
+            Type::FrameArena => "FrameArena".to_string(),
         }
     }
     
@@ -948,5 +985,69 @@ impl CodeGenerator {
         output.push_str("}\n\n");
         
         Ok(output)
+    }
+    
+    fn generate_frame_arena(&self) -> String {
+        let mut output = String::new();
+        output.push_str("// Frame-Scoped Memory Allocator (FrameArena)\n");
+        output.push_str("// Automatically frees all allocations at frame end\n");
+        output.push_str("class FrameArena {\n");
+        output.push_str("private:\n");
+        output.push_str("    struct Block {\n");
+        output.push_str("        void* ptr;\n");
+        output.push_str("        size_t size;\n");
+        output.push_str("    };\n");
+        output.push_str("    std::vector<Block> blocks;\n");
+        output.push_str("    size_t current_offset;\n");
+        output.push_str("    static constexpr size_t BLOCK_SIZE = 1024 * 1024; // 1MB blocks\n");
+        output.push_str("    std::vector<uint8_t> current_block;\n");
+        output.push_str("\n");
+        output.push_str("public:\n");
+        output.push_str("    FrameArena() : current_offset(0) {\n");
+        output.push_str("        current_block.resize(BLOCK_SIZE);\n");
+        output.push_str("    }\n");
+        output.push_str("\n");
+        output.push_str("    ~FrameArena() {\n");
+        output.push_str("        // All memory is automatically freed when blocks go out of scope\n");
+        output.push_str("    }\n");
+        output.push_str("\n");
+        output.push_str("    template<typename T>\n");
+        output.push_str("    std::vector<T> alloc_array(size_t count) {\n");
+        output.push_str("        size_t size_needed = count * sizeof(T);\n");
+        output.push_str("        size_t aligned_size = (size_needed + alignof(T) - 1) & ~(alignof(T) - 1);\n");
+        output.push_str("        \n");
+        output.push_str("        // Check if we need a new block\n");
+        output.push_str("        if (current_offset + aligned_size > current_block.size()) {\n");
+        output.push_str("            // Save current block\n");
+        output.push_str("            blocks.push_back({current_block.data(), current_block.size()});\n");
+        output.push_str("            // Allocate new block\n");
+        output.push_str("            current_block.resize(BLOCK_SIZE);\n");
+        output.push_str("            current_offset = 0;\n");
+        output.push_str("        }\n");
+        output.push_str("        \n");
+        output.push_str("        // Allocate from current block\n");
+        output.push_str("        void* ptr = current_block.data() + current_offset;\n");
+        output.push_str("        current_offset += aligned_size;\n");
+        output.push_str("        \n");
+        output.push_str("        // Construct vector with custom allocator that uses our memory\n");
+        output.push_str("        std::vector<T> result;\n");
+        output.push_str("        result.reserve(count);\n");
+        output.push_str("        for (size_t i = 0; i < count; ++i) {\n");
+        output.push_str("            new (static_cast<T*>(ptr) + i) T();\n");
+        output.push_str("            result.push_back(*static_cast<T*>(ptr) + i);\n");
+        output.push_str("        }\n");
+        output.push_str("        \n");
+        output.push_str("        return result;\n");
+        output.push_str("    }\n");
+        output.push_str("\n");
+        output.push_str("    void reset() {\n");
+        output.push_str("        // Reset for next frame\n");
+        output.push_str("        blocks.clear();\n");
+        output.push_str("        current_offset = 0;\n");
+        output.push_str("        current_block.resize(BLOCK_SIZE);\n");
+        output.push_str("    }\n");
+        output.push_str("};\n");
+        output.push_str("\n");
+        output
     }
 }
