@@ -30,6 +30,10 @@ extern "C" {
     void heidic_draw_line(float x1, float y1, float z1, float x2, float y2, float z2, float r, float g, float b);
     void heidic_draw_model_origin(float x, float y, float z, float rx, float ry, float rz, float length);
     void heidic_update_camera(float px, float py, float pz, float rx, float ry, float rz);
+    
+    // Mesh Loading
+    int heidic_load_ascii_model(const char* filename);
+    void heidic_draw_mesh(int mesh_id, float x, float y, float z, float rx, float ry, float rz);
 
     // ImGui
     void heidic_imgui_init(GLFWwindow* window);

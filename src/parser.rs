@@ -35,6 +35,14 @@ impl Parser {
                 self.advance();
                 Ok(Item::Component(self.parse_component()?))
             }
+            Token::MeshSOA => {
+                self.advance();
+                Ok(Item::MeshSOA(self.parse_mesh_soa()?))
+            }
+            Token::ComponentSOA => {
+                self.advance();
+                Ok(Item::ComponentSOA(self.parse_component_soa()?))
+            }
             Token::System => {
                 self.advance();
                 Ok(Item::System(self.parse_system()?))
@@ -43,12 +51,24 @@ impl Parser {
                 self.advance();
                 Ok(Item::ExternFunction(self.parse_extern_function()?))
             }
+            Token::Type => {
+                self.advance();
+                Ok(Item::TypeAlias(self.parse_type_alias()?))
+            }
             Token::Fn => {
                 self.advance();
                 Ok(Item::Function(self.parse_function()?))
             }
             _ => bail!("Unexpected token at item level: {:?}", self.peek()),
         }
+    }
+    
+    fn parse_type_alias(&mut self) -> Result<TypeAliasDef> {
+        let name = self.expect_ident()?;
+        self.expect(&Token::Eq)?;
+        let target_type = self.parse_type()?;
+        self.expect(&Token::Semicolon)?;
+        Ok(TypeAliasDef { name, target_type })
     }
     
     fn parse_struct(&mut self) -> Result<StructDef> {
@@ -81,6 +101,38 @@ impl Parser {
         self.expect(&Token::RBrace)?;
         
         Ok(ComponentDef { name, fields })
+    }
+    
+    fn parse_mesh_soa(&mut self) -> Result<MeshSOADef> {
+        let name = self.expect_ident()?;
+        self.expect(&Token::LBrace)?;
+        
+        let mut fields = Vec::new();
+        while !self.check(&Token::RBrace) {
+            fields.push(self.parse_field()?);
+            if !self.check(&Token::RBrace) {
+                self.expect(&Token::Comma)?;
+            }
+        }
+        self.expect(&Token::RBrace)?;
+        
+        Ok(MeshSOADef { name, fields })
+    }
+    
+    fn parse_component_soa(&mut self) -> Result<ComponentSOADef> {
+        let name = self.expect_ident()?;
+        self.expect(&Token::LBrace)?;
+        
+        let mut fields = Vec::new();
+        while !self.check(&Token::RBrace) {
+            fields.push(self.parse_field()?);
+            if !self.check(&Token::RBrace) {
+                self.expect(&Token::Comma)?;
+            }
+        }
+        self.expect(&Token::RBrace)?;
+        
+        Ok(ComponentSOADef { name, fields })
     }
     
     fn parse_system(&mut self) -> Result<SystemDef> {
@@ -204,7 +256,13 @@ impl Parser {
         let name = self.expect_ident()?;
         self.expect(&Token::Colon)?;
         let ty = self.parse_type()?;
-        Ok(Field { name, ty })
+        let default_value = if self.check(&Token::Eq) {
+            self.advance();
+            Some(self.parse_expression()?)
+        } else {
+            None
+        };
+        Ok(Field { name, ty, default_value })
     }
     
     fn parse_type(&mut self) -> Result<Type> {

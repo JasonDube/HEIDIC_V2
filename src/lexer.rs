@@ -34,6 +34,12 @@ pub enum Token {
     Query,
     #[token("extern")]
     Extern,
+    #[token("type")]
+    Type,
+    #[token("mesh_soa")]
+    MeshSOA,
+    #[token("component_soa")]
+    ComponentSOA,
     
     // Types
     #[token("i32")]

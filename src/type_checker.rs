@@ -7,6 +7,9 @@ pub struct TypeChecker {
     functions: HashMap<String, FunctionDef>,
     structs: HashMap<String, StructDef>,
     components: HashMap<String, ComponentDef>,
+    mesh_soas: HashMap<String, MeshSOADef>,
+    component_soas: HashMap<String, ComponentSOADef>,
+    type_aliases: HashMap<String, TypeAliasDef>,
 }
 
 impl TypeChecker {
@@ -16,6 +19,9 @@ impl TypeChecker {
             functions: HashMap::new(),
             structs: HashMap::new(),
             components: HashMap::new(),
+            mesh_soas: HashMap::new(),
+            component_soas: HashMap::new(),
+            type_aliases: HashMap::new(),
         }
     }
     
@@ -28,6 +34,24 @@ impl TypeChecker {
                 }
                 Item::Component(c) => {
                     self.components.insert(c.name.clone(), c.clone());
+                }
+                Item::MeshSOA(m) => {
+                    // Validate that all fields are arrays
+                    for field in &m.fields {
+                        if !matches!(field.ty, Type::Array(_)) {
+                            bail!("SOA mesh field '{}' must be an array type", field.name);
+                        }
+                    }
+                    self.mesh_soas.insert(m.name.clone(), m.clone());
+                }
+                Item::ComponentSOA(c) => {
+                    // Validate that all fields are arrays
+                    for field in &c.fields {
+                        if !matches!(field.ty, Type::Array(_)) {
+                            bail!("SOA component field '{}' must be an array type", field.name);
+                        }
+                    }
+                    self.component_soas.insert(c.name.clone(), c.clone());
                 }
                 Item::Function(f) => {
                     self.functions.insert(f.name.clone(), f.clone());
@@ -46,6 +70,9 @@ impl TypeChecker {
                     for func in &s.functions {
                         self.functions.insert(func.name.clone(), func.clone());
                     }
+                }
+                Item::TypeAlias(alias) => {
+                    self.type_aliases.insert(alias.name.clone(), alias.clone());
                 }
             }
         }
@@ -390,6 +417,8 @@ impl TypeChecker {
             (Type::Array(a), Type::Array(b)) => self.types_compatible(a, b),
             (Type::Struct(a), Type::Struct(b)) => a == b,
             (Type::Component(a), Type::Component(b)) => a == b,
+            (Type::MeshSOA(a), Type::MeshSOA(b)) => a == b,
+            (Type::ComponentSOA(a), Type::ComponentSOA(b)) => a == b,
             // Vulkan types
             (Type::VkInstance, Type::VkInstance) => true,
             (Type::VkDevice, Type::VkDevice) => true,

@@ -9,6 +9,8 @@ pub enum Type {
     Array(Box<Type>),
     Struct(String),
     Component(String),
+    MeshSOA(String),
+    ComponentSOA(String),
     Void,
     // Vulkan types
     VkInstance,
@@ -47,9 +49,18 @@ pub struct Program {
 pub enum Item {
     Struct(StructDef),
     Component(ComponentDef),
+    MeshSOA(MeshSOADef),
+    ComponentSOA(ComponentSOADef),
     System(SystemDef),
     Function(FunctionDef),
     ExternFunction(ExternFunctionDef),
+    TypeAlias(TypeAliasDef),
+}
+
+#[derive(Debug, Clone)]
+pub struct TypeAliasDef {
+    pub name: String,
+    pub target_type: Type,
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +76,18 @@ pub struct ComponentDef {
 }
 
 #[derive(Debug, Clone)]
+pub struct MeshSOADef {
+    pub name: String,
+    pub fields: Vec<Field>, // All fields must be array types
+}
+
+#[derive(Debug, Clone)]
+pub struct ComponentSOADef {
+    pub name: String,
+    pub fields: Vec<Field>, // All fields must be array types
+}
+
+#[derive(Debug, Clone)]
 pub struct SystemDef {
     pub name: String,
     pub functions: Vec<FunctionDef>,
@@ -74,6 +97,7 @@ pub struct SystemDef {
 pub struct Field {
     pub name: String,
     pub ty: Type,
+    pub default_value: Option<Expression>,
 }
 
 #[derive(Debug, Clone)]

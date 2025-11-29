@@ -29,7 +29,14 @@ impl CodeGenerator {
         output.push_str("#include \"stdlib/eden_imgui.h\"\n");
         output.push_str("\n");
         
-        // Generate structs and components
+        // Generate type aliases first (so they can be used by structs/components)
+        for item in &program.items {
+            if let Item::TypeAlias(alias) = item {
+                output.push_str(&self.generate_type_alias(alias));
+            }
+        }
+        
+        // Generate structs, components, and SOA types
         for item in &program.items {
             match item {
                 Item::Struct(s) => {
@@ -37,6 +44,12 @@ impl CodeGenerator {
                 }
                 Item::Component(c) => {
                     output.push_str(&self.generate_component(c, 0));
+                }
+                Item::MeshSOA(m) => {
+                    output.push_str(&self.generate_mesh_soa(m, 0));
+                }
+                Item::ComponentSOA(c) => {
+                    output.push_str(&self.generate_component_soa(c, 0));
                 }
                 _ => {}
             }
@@ -160,14 +173,95 @@ impl CodeGenerator {
     
     fn generate_component(&self, c: &ComponentDef, indent: usize) -> String {
         let mut output = format!("struct {} {{\n", c.name);
+        
+        // Generate fields
         for field in &c.fields {
             output.push_str(&format!("{}    {} {};\n", 
                 self.indent(indent + 1), 
                 self.type_to_cpp(&field.ty), 
                 field.name));
         }
+        
+        // Generate constructor with default values
+        let has_defaults = c.fields.iter().any(|f| f.default_value.is_some());
+        if has_defaults {
+            output.push_str(&format!("{}\n", self.indent(indent + 1)));
+            output.push_str(&format!("{}    {}({}) {{\n", 
+                self.indent(indent + 1), 
+                c.name,
+                self.generate_constructor_params(&c.fields)));
+            
+            // Initialize fields
+            for field in &c.fields {
+                if let Some(ref default_expr) = field.default_value {
+                    output.push_str(&format!("{}        {} = {};\n",
+                        self.indent(indent + 1),
+                        field.name,
+                        self.generate_expression(default_expr)));
+                }
+            }
+            output.push_str(&format!("{}    }}\n", self.indent(indent + 1)));
+        }
+        
         output.push_str("};\n\n");
         output
+    }
+    
+    fn generate_mesh_soa(&self, m: &MeshSOADef, indent: usize) -> String {
+        // SOA structures: each field is a separate array
+        // This generates the same structure as regular structs, but semantically
+        // represents Structure-of-Arrays layout (optimized for CUDA/OptiX)
+        let mut output = format!("// SOA (Structure-of-Arrays) mesh data - optimized for CUDA/OptiX\n");
+        output.push_str(&format!("struct {} {{\n", m.name));
+        
+        for field in &m.fields {
+            output.push_str(&format!("{}    {} {};\n", 
+                self.indent(indent + 1), 
+                self.type_to_cpp(&field.ty), 
+                field.name));
+        }
+        
+        output.push_str("};\n\n");
+        output
+    }
+    
+    fn generate_component_soa(&self, c: &ComponentSOADef, indent: usize) -> String {
+        // SOA components: each field is a separate array
+        // This is the preferred layout for ECS systems (better cache performance)
+        let mut output = format!("// SOA (Structure-of-Arrays) component - optimized for ECS iteration\n");
+        output.push_str(&format!("struct {} {{\n", c.name));
+        
+        for field in &c.fields {
+            output.push_str(&format!("{}    {} {};\n", 
+                self.indent(indent + 1), 
+                self.type_to_cpp(&field.ty), 
+                field.name));
+        }
+        
+        output.push_str("};\n\n");
+        output
+    }
+    
+    fn generate_constructor_params(&self, fields: &[Field]) -> String {
+        let mut params = Vec::new();
+        for field in fields {
+            if let Some(ref default_expr) = field.default_value {
+                params.push(format!("{} {} = {}",
+                    self.type_to_cpp(&field.ty),
+                    field.name,
+                    self.generate_expression(default_expr)));
+            } else {
+                params.push(format!("{} {}",
+                    self.type_to_cpp(&field.ty),
+                    field.name));
+            }
+        }
+        params.join(", ")
+    }
+    
+    fn generate_type_alias(&self, alias: &TypeAliasDef) -> String {
+        let target_type = self.type_to_cpp(&alias.target_type);
+        format!("using {} = {};\n", alias.name, target_type)
     }
     
     fn generate_function(&self, f: &FunctionDef, indent: usize) -> String {
@@ -426,6 +520,8 @@ impl CodeGenerator {
             }
             Type::Struct(name) => name.clone(),
             Type::Component(name) => name.clone(),
+            Type::MeshSOA(name) => name.clone(),
+            Type::ComponentSOA(name) => name.clone(),
             Type::Void => "void".to_string(),
             // Vulkan types
             Type::VkInstance => "VkInstance".to_string(),

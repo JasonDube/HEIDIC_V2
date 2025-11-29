@@ -11,16 +11,35 @@
 #include <algorithm>
 #include <array>
 #include <fstream>
+#define STB_IMAGE_IMPLEMENTATION
+#include "../third_party/stb_image.h"
+#include <sstream>
 
 // ImGui
 #include "../third_party/imgui/imgui.h"
 #include "../third_party/imgui/backends/imgui_impl_glfw.h"
 #include "../third_party/imgui/backends/imgui_impl_vulkan.h"
 
-// Vertex structure
+// Validation Layers & Debug Utils
+#ifdef NDEBUG
+const bool g_enableValidationLayers = false;
+#else
+const bool g_enableValidationLayers = true;
+#endif
+
+const std::vector<const char*> g_validationLayers = {
+    "VK_LAYER_KHRONOS_validation"
+};
+
+const std::vector<const char*> g_debugUtilsExtensions = {
+    VK_EXT_DEBUG_UTILS_EXTENSION_NAME
+};
+
+// Vertex structure (supports both textured and colored rendering)
 struct Vertex {
     float pos[3];
-    float color[3];
+    float uv[2];
+    float color[3];  // RGB color for colored rendering
     
     static VkVertexInputBindingDescription getBindingDescription() {
         VkVertexInputBindingDescription bindingDescription = {};
@@ -30,8 +49,8 @@ struct Vertex {
         return bindingDescription;
     }
 
-    static std::array<VkVertexInputAttributeDescription, 2> getAttributeDescriptions() {
-        std::array<VkVertexInputAttributeDescription, 2> attributeDescriptions = {};
+    static std::array<VkVertexInputAttributeDescription, 3> getAttributeDescriptions() {
+        std::array<VkVertexInputAttributeDescription, 3> attributeDescriptions = {};
 
         attributeDescriptions[0].binding = 0;
         attributeDescriptions[0].location = 0;
@@ -40,8 +59,13 @@ struct Vertex {
 
         attributeDescriptions[1].binding = 0;
         attributeDescriptions[1].location = 1;
-        attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-        attributeDescriptions[1].offset = offsetof(Vertex, color);
+        attributeDescriptions[1].format = VK_FORMAT_R32G32_SFLOAT;
+        attributeDescriptions[1].offset = offsetof(Vertex, uv);
+
+        attributeDescriptions[2].binding = 0;
+        attributeDescriptions[2].location = 2;
+        attributeDescriptions[2].format = VK_FORMAT_R32G32B32_SFLOAT;
+        attributeDescriptions[2].offset = offsetof(Vertex, color);
 
         return attributeDescriptions;
     }
@@ -79,9 +103,10 @@ static VkExtent2D g_swapchainExtent = {};
 // Additional state
 static std::vector<VkImage> g_swapchainImages;
 static std::vector<VkImageView> g_swapchainImageViews;
-static VkSemaphore g_imageAvailableSemaphore = VK_NULL_HANDLE;
-static VkSemaphore g_renderFinishedSemaphore = VK_NULL_HANDLE;
+static std::vector<VkSemaphore> g_imageAvailableSemaphores;  // Per swapchain image
+static std::vector<VkSemaphore> g_renderFinishedSemaphores;  // Per swapchain image
 static VkFence g_inFlightFence = VK_NULL_HANDLE;
+static VkFence g_imageAvailableFence = VK_NULL_HANDLE;  // Separate fence for image acquisition
 static uint32_t g_swapchainImageCount = 0;
 static VkFormat g_swapchainImageFormat = VK_FORMAT_UNDEFINED;
 
@@ -91,6 +116,9 @@ static VkDeviceMemory g_depthImageMemory = VK_NULL_HANDLE;
 static VkImageView g_depthImageView = VK_NULL_HANDLE;
 static VkFormat g_depthFormat = VK_FORMAT_D32_SFLOAT;
 
+// Debug messenger (for validation layers)
+static VkDebugUtilsMessengerEXT g_debugMessenger = VK_NULL_HANDLE;
+
 // Descriptor sets
 static VkDescriptorSetLayout g_descriptorSetLayout = VK_NULL_HANDLE;
 static VkDescriptorPool g_descriptorPool = VK_NULL_HANDLE;
@@ -98,6 +126,285 @@ static VkDescriptorPool g_imguiDescriptorPool = VK_NULL_HANDLE;
 static std::vector<VkDescriptorSet> g_descriptorSets;
 static std::vector<VkBuffer> g_uniformBuffers;
 static std::vector<VkDeviceMemory> g_uniformBuffersMemory;
+
+// Texture resources (single global texture)
+static VkImage g_textureImage = VK_NULL_HANDLE;
+static VkDeviceMemory g_textureImageMemory = VK_NULL_HANDLE;
+static VkImageView g_textureImageView = VK_NULL_HANDLE;
+static VkSampler g_textureSampler = VK_NULL_HANDLE;
+
+// Forward declarations
+static uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
+static void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory);
+static void createTextureAndDescriptors(GLFWwindow* window);
+
+// Helper: transition image layout
+static void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout) {
+    VkCommandBufferAllocateInfo allocInfo = {};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandPool = g_commandPool;
+    allocInfo.commandBufferCount = 1;
+
+    VkCommandBuffer cmd;
+    vkAllocateCommandBuffers(g_device, &allocInfo, &cmd);
+
+    VkCommandBufferBeginInfo beginInfo = {};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &beginInfo);
+
+    VkImageMemoryBarrier barrier = {};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout = oldLayout;
+    barrier.newLayout = newLayout;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = image;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+
+    VkPipelineStageFlags srcStage;
+    VkPipelineStageFlags dstStage;
+
+    if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        srcStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        dstStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    } else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        srcStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        dstStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    } else {
+        srcStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        dstStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    }
+
+    vkCmdPipelineBarrier(
+        cmd,
+        srcStage, dstStage,
+        0,
+        0, nullptr,
+        0, nullptr,
+        1, &barrier
+    );
+
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo submitInfo = {};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmd;
+    vkQueueSubmit(g_graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(g_graphicsQueue);
+
+    vkFreeCommandBuffers(g_device, g_commandPool, 1, &cmd);
+}
+
+static void createTextureAndDescriptors(GLFWwindow* /*window*/) {
+    if (g_textureImage != VK_NULL_HANDLE) {
+        // Already created
+        // Still need to write descriptors for UBO + sampler
+    }
+
+    // Load PNG (test.png) - try multiple paths
+    int texWidth, texHeight, texChannels;
+    stbi_uc* pixels = nullptr;
+    
+    const char* paths[] = {
+        "../models/test.png",      // From examples/ascii_import_test/
+        "../../models/test.png",   // From examples/ascii_import_test/ (going up to heidic_v2)
+        "models/test.png",         // From heidic_v2/
+        "../test.png"              // Fallback
+    };
+    
+    for (int i = 0; i < 4; i++) {
+        pixels = stbi_load(paths[i], &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+        if (pixels) {
+            std::cout << "Loaded texture from: " << paths[i] << std::endl;
+            std::cout.flush();
+            break;
+        }
+    }
+    
+    // If loading failed, create a 1x1 white texture as fallback
+    bool usingFallback = false;
+    if (!pixels) {
+        std::cerr << "Failed to load texture image from all paths. Using fallback 1x1 white texture." << std::endl;
+        texWidth = 1;
+        texHeight = 1;
+        texChannels = 4;
+        pixels = new stbi_uc[4];
+        pixels[0] = 255; // R
+        pixels[1] = 255; // G
+        pixels[2] = 255; // B
+        pixels[3] = 255; // A
+        usingFallback = true;
+    }
+
+    VkDeviceSize imageSize = (VkDeviceSize)(texWidth) * texHeight * 4;
+
+    VkBuffer stagingBuffer;
+    VkDeviceMemory stagingBufferMemory;
+    createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
+
+    void* data;
+    vkMapMemory(g_device, stagingBufferMemory, 0, imageSize, 0, &data);
+    memcpy(data, pixels, (size_t)imageSize);
+    vkUnmapMemory(g_device, stagingBufferMemory);
+
+    // Free pixels - use delete[] for fallback, stbi_image_free for loaded images
+    if (usingFallback) {
+        delete[] pixels;
+    } else {
+        stbi_image_free(pixels);
+    }
+
+    VkImageCreateInfo imageInfo = {};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.extent.width = texWidth;
+    imageInfo.extent.height = texHeight;
+    imageInfo.extent.depth = 1;
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    vkCreateImage(g_device, &imageInfo, nullptr, &g_textureImage);
+
+    VkMemoryRequirements memRequirements;
+    vkGetImageMemoryRequirements(g_device, g_textureImage, &memRequirements);
+
+    VkMemoryAllocateInfo allocInfo = {};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    vkAllocateMemory(g_device, &allocInfo, nullptr, &g_textureImageMemory);
+    vkBindImageMemory(g_device, g_textureImage, g_textureImageMemory, 0);
+
+    // Transition, copy, transition
+    transitionImageLayout(g_textureImage, imageInfo.format, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+    VkCommandBufferAllocateInfo cbAlloc = {};
+    cbAlloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbAlloc.commandPool = g_commandPool;
+    cbAlloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbAlloc.commandBufferCount = 1;
+
+    VkCommandBuffer cmd;
+    vkAllocateCommandBuffers(g_device, &cbAlloc, &cmd);
+
+    VkCommandBufferBeginInfo beginInfo = {};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &beginInfo);
+
+    VkBufferImageCopy region = {};
+    region.bufferOffset = 0;
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.mipLevel = 0;
+    region.imageSubresource.baseArrayLayer = 0;
+    region.imageSubresource.layerCount = 1;
+    region.imageOffset = {0, 0, 0};
+    region.imageExtent = { (uint32_t)texWidth, (uint32_t)texHeight, 1 };
+
+    vkCmdCopyBufferToImage(
+        cmd,
+        stagingBuffer,
+        g_textureImage,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        1,
+        &region
+    );
+
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo submitInfo = {};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmd;
+    vkQueueSubmit(g_graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(g_graphicsQueue);
+
+    vkFreeCommandBuffers(g_device, g_commandPool, 1, &cmd);
+
+    transitionImageLayout(g_textureImage, imageInfo.format, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+    vkDestroyBuffer(g_device, stagingBuffer, nullptr);
+    vkFreeMemory(g_device, stagingBufferMemory, nullptr);
+
+    // Create image view
+    VkImageViewCreateInfo viewInfo = {};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = g_textureImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = imageInfo.format;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    vkCreateImageView(g_device, &viewInfo, nullptr, &g_textureImageView);
+
+    // Create sampler
+    VkSamplerCreateInfo samplerInfo = {};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.anisotropyEnable = VK_FALSE;
+    samplerInfo.maxAnisotropy = 1.0f;
+    samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+    samplerInfo.unnormalizedCoordinates = VK_FALSE;
+    samplerInfo.compareEnable = VK_FALSE;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+
+    vkCreateSampler(g_device, &samplerInfo, nullptr, &g_textureSampler);
+
+    // Write descriptors: UBO + texture sampler
+    for (size_t i = 0; i < g_swapchainImageCount; i++) {
+        VkDescriptorBufferInfo bufferInfo = {};
+        bufferInfo.buffer = g_uniformBuffers[i];
+        bufferInfo.offset = 0;
+        bufferInfo.range = sizeof(UniformBufferObject);
+
+        VkDescriptorImageInfo imageInfo2 = {};
+        imageInfo2.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfo2.imageView = g_textureImageView;
+        imageInfo2.sampler = g_textureSampler;
+
+        VkWriteDescriptorSet writes[2] = {};
+        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet = g_descriptorSets[i];
+        writes[0].dstBinding = 0;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[0].descriptorCount = 1;
+        writes[0].pBufferInfo = &bufferInfo;
+
+        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet = g_descriptorSets[i];
+        writes[1].dstBinding = 1;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[1].descriptorCount = 1;
+        writes[1].pImageInfo = &imageInfo2;
+
+        vkUpdateDescriptorSets(g_device, 2, writes, 0, nullptr);
+    }
+}
 
 // Cube resources
 static VkBuffer g_cubeVertexBuffer = VK_NULL_HANDLE;
@@ -116,7 +423,9 @@ static std::vector<char> readFile(const std::string& filename) {
         filename,
         "../" + filename,
         "../../" + filename,
-        "examples/top_down/" + filename, 
+        "../top_down/" + filename,
+        "examples/top_down/" + filename,
+        "examples/ascii_import_test/" + filename,
         "shaders/" + filename,
         "../shaders/" + filename
     };
@@ -176,56 +485,55 @@ static void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPr
 
 // Create Cube Vertex Buffer
 static void createCube() {
-    // ... (Existing cube creation logic) ...
-    // 1x1x1 cube centered at origin, with colors
+    // 1x1x1 cube centered at origin, with colored faces
     std::vector<Vertex> vertices = {
         // Front face (Red)
-        {{-0.5f, -0.5f,  0.5f}, {1.0f, 0.0f, 0.0f}},
-        {{ 0.5f, -0.5f,  0.5f}, {1.0f, 0.0f, 0.0f}},
-        {{ 0.5f,  0.5f,  0.5f}, {1.0f, 0.0f, 0.0f}},
-        {{ 0.5f,  0.5f,  0.5f}, {1.0f, 0.0f, 0.0f}},
-        {{-0.5f,  0.5f,  0.5f}, {1.0f, 0.0f, 0.0f}},
-        {{-0.5f, -0.5f,  0.5f}, {1.0f, 0.0f, 0.0f}},
-        
+        {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}},
+        {{ 0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}},
+        {{ 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}},
+        {{ 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}},
+        {{-0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}},
+        {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}},
+
         // Back face (Green)
-        {{-0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-        {{-0.5f,  0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-        {{ 0.5f,  0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-        {{ 0.5f,  0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-        {{ 0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-        {{-0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
+        {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}},
+        {{-0.5f,  0.5f, -0.5f}, {0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}},
+        {{ 0.5f,  0.5f, -0.5f}, {0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}},
+        {{ 0.5f,  0.5f, -0.5f}, {0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}},
+        {{ 0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}},
+        {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}},
 
         // Top face (Blue)
-        {{-0.5f,  0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}},
-        {{-0.5f,  0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}},
-        {{ 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}},
-        {{ 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f, 1.0f}},
-        {{ 0.5f,  0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}},
-        {{-0.5f,  0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}},
+        {{-0.5f,  0.5f, -0.5f}, {0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}},
+        {{-0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}},
+        {{ 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}},
+        {{ 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}},
+        {{ 0.5f,  0.5f, -0.5f}, {0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}},
+        {{-0.5f,  0.5f, -0.5f}, {0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}},
 
         // Bottom face (Yellow)
-        {{-0.5f, -0.5f, -0.5f}, {1.0f, 1.0f, 0.0f}},
-        {{ 0.5f, -0.5f, -0.5f}, {1.0f, 1.0f, 0.0f}},
-        {{ 0.5f, -0.5f,  0.5f}, {1.0f, 1.0f, 0.0f}},
-        {{ 0.5f, -0.5f,  0.5f}, {1.0f, 1.0f, 0.0f}},
-        {{-0.5f, -0.5f,  0.5f}, {1.0f, 1.0f, 0.0f}},
-        {{-0.5f, -0.5f, -0.5f}, {1.0f, 1.0f, 0.0f}},
+        {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {1.0f, 1.0f, 0.0f}},
+        {{ 0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {1.0f, 1.0f, 0.0f}},
+        {{ 0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {1.0f, 1.0f, 0.0f}},
+        {{ 0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {1.0f, 1.0f, 0.0f}},
+        {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {1.0f, 1.0f, 0.0f}},
+        {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {1.0f, 1.0f, 0.0f}},
 
         // Right face (Cyan)
-        {{ 0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 1.0f}},
-        {{ 0.5f,  0.5f, -0.5f}, {0.0f, 1.0f, 1.0f}},
-        {{ 0.5f,  0.5f,  0.5f}, {0.0f, 1.0f, 1.0f}},
-        {{ 0.5f,  0.5f,  0.5f}, {0.0f, 1.0f, 1.0f}},
-        {{ 0.5f, -0.5f,  0.5f}, {0.0f, 1.0f, 1.0f}},
-        {{ 0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 1.0f}},
+        {{ 0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {0.0f, 1.0f, 1.0f}},
+        {{ 0.5f,  0.5f, -0.5f}, {0.0f, 0.0f}, {0.0f, 1.0f, 1.0f}},
+        {{ 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {0.0f, 1.0f, 1.0f}},
+        {{ 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {0.0f, 1.0f, 1.0f}},
+        {{ 0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {0.0f, 1.0f, 1.0f}},
+        {{ 0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {0.0f, 1.0f, 1.0f}},
 
         // Left face (Magenta)
-        {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 1.0f}},
-        {{-0.5f, -0.5f,  0.5f}, {1.0f, 0.0f, 1.0f}},
-        {{-0.5f,  0.5f,  0.5f}, {1.0f, 0.0f, 1.0f}},
-        {{-0.5f,  0.5f,  0.5f}, {1.0f, 0.0f, 1.0f}},
-        {{-0.5f,  0.5f, -0.5f}, {1.0f, 0.0f, 1.0f}},
-        {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 1.0f}}
+        {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {1.0f, 0.0f, 1.0f}},
+        {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {1.0f, 0.0f, 1.0f}},
+        {{-0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {1.0f, 0.0f, 1.0f}},
+        {{-0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {1.0f, 0.0f, 1.0f}},
+        {{-0.5f,  0.5f, -0.5f}, {0.0f, 0.0f}, {1.0f, 0.0f, 1.0f}},
+        {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {1.0f, 0.0f, 1.0f}}
     };
     
     g_cubeVertexCount = static_cast<uint32_t>(vertices.size());
@@ -374,6 +682,109 @@ static uint32_t findGraphicsQueueFamily(VkPhysicalDevice device, VkSurfaceKHR su
     return UINT32_MAX;
 }
 
+// Validation Layer Helpers
+static bool checkValidationLayerSupport() {
+    uint32_t layerCount;
+    vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
+    std::vector<VkLayerProperties> availableLayers(layerCount);
+    vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data());
+    
+    for (const char* layerName : g_validationLayers) {
+        bool layerFound = false;
+        for (const auto& layerProperties : availableLayers) {
+            if (strcmp(layerName, layerProperties.layerName) == 0) {
+                layerFound = true;
+                break;
+            }
+        }
+        if (!layerFound) {
+            std::cerr << "[EDEN] Validation layer not found: " << layerName << std::endl;
+            return false;
+        }
+    }
+    return true;
+}
+
+// Debug Callback
+static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
+    VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+    VkDebugUtilsMessageTypeFlagsEXT messageType,
+    const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
+    void* pUserData) {
+    
+    // Filter: Only show errors and warnings in release, everything in debug
+    #ifdef NDEBUG
+    if (messageSeverity < VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
+        return VK_FALSE;
+    }
+    #endif
+    
+    std::cerr << "[Vulkan Validation] ";
+    
+    if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
+        std::cerr << "ERROR: ";
+    } else if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
+        std::cerr << "WARNING: ";
+    } else if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
+        std::cerr << "INFO: ";
+    } else {
+        std::cerr << "VERBOSE: ";
+    }
+    
+    std::cerr << pCallbackData->pMessage << std::endl;
+    
+    return VK_FALSE;  // Don't abort
+}
+
+// Debug Messenger Creation/Destruction
+static VkResult CreateDebugUtilsMessengerEXT(
+    VkInstance instance,
+    const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo,
+    const VkAllocationCallbacks* pAllocator,
+    VkDebugUtilsMessengerEXT* pDebugMessenger) {
+    auto func = (PFN_vkCreateDebugUtilsMessengerEXT)
+        vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT");
+    if (func != nullptr) {
+        return func(instance, pCreateInfo, pAllocator, pDebugMessenger);
+    } else {
+        return VK_ERROR_EXTENSION_NOT_PRESENT;
+    }
+}
+
+static void DestroyDebugUtilsMessengerEXT(
+    VkInstance instance,
+    VkDebugUtilsMessengerEXT debugMessenger,
+    const VkAllocationCallbacks* pAllocator) {
+    auto func = (PFN_vkDestroyDebugUtilsMessengerEXT)
+        vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT");
+    if (func != nullptr) {
+        func(instance, debugMessenger, pAllocator);
+    }
+}
+
+static void setupDebugMessenger() {
+    if (!g_enableValidationLayers) return;
+    
+    VkDebugUtilsMessengerCreateInfoEXT createInfo = {};
+    createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+    createInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
+                                 VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                                 VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+    createInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+                            VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                            VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+    createInfo.pfnUserCallback = debugCallback;
+    createInfo.pUserData = nullptr;
+    
+    if (CreateDebugUtilsMessengerEXT(g_instance, &createInfo, nullptr, &g_debugMessenger) != VK_SUCCESS) {
+        std::cerr << "[EDEN] Failed to set up debug messenger!" << std::endl;
+        std::cerr.flush();
+    } else {
+        std::cout << "[EDEN] Debug messenger initialized" << std::endl;
+        std::cout.flush();
+    }
+}
+
 
 // Configure GLFW for Vulkan
 extern "C" void heidic_glfw_vulkan_hints() {
@@ -400,11 +811,38 @@ extern "C" int heidic_init_renderer(GLFWwindow* window) {
         // 1. Instance
         uint32_t glfwExtensionCount = 0;
         const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
+        
+        // Check validation layer support
+        if (g_enableValidationLayers && !checkValidationLayerSupport()) {
+            std::cerr << "[EDEN] Validation layers requested but not available!" << std::endl;
+            std::cerr << "[EDEN] Continuing without validation layers..." << std::endl;
+        }
+        
+        // Build extension list (GLFW extensions + debug utils if needed)
+        std::vector<const char*> extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
+        if (g_enableValidationLayers) {
+            extensions.insert(extensions.end(), g_debugUtilsExtensions.begin(), g_debugUtilsExtensions.end());
+        }
+        
         VkInstanceCreateInfo instanceInfo = {};
         instanceInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-        instanceInfo.enabledExtensionCount = glfwExtensionCount;
-        instanceInfo.ppEnabledExtensionNames = glfwExtensions;
+        instanceInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
+        instanceInfo.ppEnabledExtensionNames = extensions.data();
+        
+        // Enable validation layers if requested
+        if (g_enableValidationLayers && checkValidationLayerSupport()) {
+            instanceInfo.enabledLayerCount = static_cast<uint32_t>(g_validationLayers.size());
+            instanceInfo.ppEnabledLayerNames = g_validationLayers.data();
+            std::cout << "[EDEN] Validation layers enabled" << std::endl;
+            std::cout.flush();
+        } else {
+            instanceInfo.enabledLayerCount = 0;
+        }
+        
         if (vkCreateInstance(&instanceInfo, nullptr, &g_instance) != VK_SUCCESS) return 0;
+        
+        // Setup debug messenger (must be after instance creation)
+        setupDebugMessenger();
 
         // 2. Surface
         if (glfwCreateWindowSurface(g_instance, window, nullptr, &g_surface) != VK_SUCCESS) return 0;
@@ -524,17 +962,23 @@ extern "C" int heidic_init_renderer(GLFWwindow* window) {
 
         if (vkCreateRenderPass(g_device, &renderPassInfo, nullptr, &g_renderPass) != VK_SUCCESS) return 0;
 
-        // 10. Descriptor Set Layout
-        VkDescriptorSetLayoutBinding uboBinding = {};
-        uboBinding.binding = 0;
-        uboBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        uboBinding.descriptorCount = 1;
-        uboBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        // 10. Descriptor Set Layout (UBO + Texture)
+        VkDescriptorSetLayoutBinding bindings[2] = {};
+        // UBO at binding 0
+        bindings[0].binding = 0;
+        bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        bindings[0].descriptorCount = 1;
+        bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        // Texture sampler at binding 1
+        bindings[1].binding = 1;
+        bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[1].descriptorCount = 1;
+        bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
         VkDescriptorSetLayoutCreateInfo layoutInfo = {};
         layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        layoutInfo.bindingCount = 1;
-        layoutInfo.pBindings = &uboBinding;
+        layoutInfo.bindingCount = 2;
+        layoutInfo.pBindings = bindings;
         vkCreateDescriptorSetLayout(g_device, &layoutInfo, nullptr, &g_descriptorSetLayout);
 
         // 11. Pipeline (Triangles)
@@ -585,7 +1029,7 @@ extern "C" int heidic_init_renderer(GLFWwindow* window) {
         VkPipelineRasterizationStateCreateInfo rasterizer = {};
         rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
         rasterizer.lineWidth = 1.0f;
-        rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+        rasterizer.cullMode = VK_CULL_MODE_NONE; // Disable culling so imported models render regardless of winding
         rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
 
         VkPipelineMultisampleStateCreateInfo multisampling = {};
@@ -672,13 +1116,16 @@ extern "C" int heidic_init_renderer(GLFWwindow* window) {
         }
 
         // 14. Descriptor Pool
-        VkDescriptorPoolSize poolSize = {};
-        poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        poolSize.descriptorCount = static_cast<uint32_t>(g_swapchainImageCount);
+        VkDescriptorPoolSize poolSizes[2] = {};
+        poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        poolSizes[0].descriptorCount = static_cast<uint32_t>(g_swapchainImageCount);
+        poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        poolSizes[1].descriptorCount = static_cast<uint32_t>(g_swapchainImageCount);
+
         VkDescriptorPoolCreateInfo poolInfo2 = {};
         poolInfo2.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        poolInfo2.poolSizeCount = 1;
-        poolInfo2.pPoolSizes = &poolSize;
+        poolInfo2.poolSizeCount = 2;
+        poolInfo2.pPoolSizes = poolSizes;
         poolInfo2.maxSets = static_cast<uint32_t>(g_swapchainImageCount);
         vkCreateDescriptorPool(g_device, &poolInfo2, nullptr, &g_descriptorPool);
 
@@ -692,20 +1139,8 @@ extern "C" int heidic_init_renderer(GLFWwindow* window) {
         g_descriptorSets.resize(g_swapchainImageCount);
         vkAllocateDescriptorSets(g_device, &allocInfo, g_descriptorSets.data());
 
-        for (size_t i = 0; i < g_swapchainImageCount; i++) {
-            VkDescriptorBufferInfo bufferInfo = {};
-            bufferInfo.buffer = g_uniformBuffers[i];
-            bufferInfo.offset = 0;
-            bufferInfo.range = sizeof(UniformBufferObject);
-            VkWriteDescriptorSet descriptorWrite = {};
-            descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            descriptorWrite.dstSet = g_descriptorSets[i];
-            descriptorWrite.dstBinding = 0;
-            descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            descriptorWrite.descriptorCount = 1;
-            descriptorWrite.pBufferInfo = &bufferInfo;
-            vkUpdateDescriptorSets(g_device, 1, &descriptorWrite, 0, nullptr);
-        }
+        // Create texture and write descriptors (UBO + sampler)
+        createTextureAndDescriptors(window);
 
         // 16. Command Buffers
         g_commandBuffers.resize(g_swapchainImageCount);
@@ -716,15 +1151,29 @@ extern "C" int heidic_init_renderer(GLFWwindow* window) {
         cbAllocInfo.commandBufferCount = (uint32_t)g_commandBuffers.size();
         vkAllocateCommandBuffers(g_device, &cbAllocInfo, g_commandBuffers.data());
 
-        // 17. Sync Objects
+        // 17. Sync Objects (per swapchain image to avoid semaphore reuse)
         VkSemaphoreCreateInfo semaphoreInfo = {};
         semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
         VkFenceCreateInfo fenceInfo = {};
         fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
         fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-        vkCreateSemaphore(g_device, &semaphoreInfo, nullptr, &g_imageAvailableSemaphore);
-        vkCreateSemaphore(g_device, &semaphoreInfo, nullptr, &g_renderFinishedSemaphore);
+        
+        g_imageAvailableSemaphores.resize(g_swapchainImageCount);
+        g_renderFinishedSemaphores.resize(g_swapchainImageCount);
+        
+        for (size_t i = 0; i < g_swapchainImageCount; i++) {
+            if (vkCreateSemaphore(g_device, &semaphoreInfo, nullptr, &g_imageAvailableSemaphores[i]) != VK_SUCCESS ||
+                vkCreateSemaphore(g_device, &semaphoreInfo, nullptr, &g_renderFinishedSemaphores[i]) != VK_SUCCESS) {
+                std::cerr << "[EDEN] Failed to create semaphores!" << std::endl;
+                return 0;
+            }
+        }
+        
         vkCreateFence(g_device, &fenceInfo, nullptr, &g_inFlightFence);
+        
+        // Create separate fence for image acquisition
+        fenceInfo.flags = 0;  // Not signaled initially
+        vkCreateFence(g_device, &fenceInfo, nullptr, &g_imageAvailableFence);
 
         // 18. Cube
         createCube();
@@ -790,6 +1239,12 @@ extern "C" void heidic_cleanup_renderer() {
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
     
+    // Cleanup debug messenger
+    if (g_enableValidationLayers && g_debugMessenger != VK_NULL_HANDLE) {
+        DestroyDebugUtilsMessengerEXT(g_instance, g_debugMessenger, nullptr);
+        g_debugMessenger = VK_NULL_HANDLE;
+    }
+    
     // Cleanup rest (simplified)
 }
 
@@ -818,12 +1273,18 @@ extern "C" void heidic_begin_frame() {
     vkWaitForFences(g_device, 1, &g_inFlightFence, VK_TRUE, UINT64_MAX);
     
     uint32_t imageIndex;
-    VkResult result = vkAcquireNextImageKHR(g_device, g_swapchain, UINT64_MAX, g_imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+    // Acquire next image using fence (required: either semaphore or fence must be non-NULL)
+    // We'll use imageIndex to select the correct semaphore for render-finished signal
+    vkResetFences(g_device, 1, &g_imageAvailableFence);
+    VkResult result = vkAcquireNextImageKHR(g_device, g_swapchain, UINT64_MAX, VK_NULL_HANDLE, g_imageAvailableFence, &imageIndex);
+    vkWaitForFences(g_device, 1, &g_imageAvailableFence, VK_TRUE, UINT64_MAX);
     
     if (result == VK_ERROR_OUT_OF_DATE_KHR) {
         return;
     }
     
+    // Use the actual imageIndex we got from acquire to select the correct semaphores
+    // This ensures each swapchain image uses its own semaphore (fixes validation error)
     g_currentFrame = imageIndex;
     vkResetFences(g_device, 1, &g_inFlightFence);
     vkResetCommandBuffer(g_commandBuffers[g_currentFrame], 0);
@@ -890,14 +1351,14 @@ extern "C" void heidic_end_frame() {
     
     VkSubmitInfo submitInfo = {};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    VkSemaphore waitSemaphores[] = {g_imageAvailableSemaphore};
-    VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
-    submitInfo.waitSemaphoreCount = 1;
-    submitInfo.pWaitSemaphores = waitSemaphores;
-    submitInfo.pWaitDstStageMask = waitStages;
+    // Don't wait on a semaphore since we didn't use one with acquire
+    // The fence already ensures the image is ready
+    submitInfo.waitSemaphoreCount = 0;
+    submitInfo.pWaitSemaphores = nullptr;
+    submitInfo.pWaitDstStageMask = nullptr;
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &cb;
-    VkSemaphore signalSemaphores[] = {g_renderFinishedSemaphore};
+    VkSemaphore signalSemaphores[] = {g_renderFinishedSemaphores[g_currentFrame]};
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pSignalSemaphores = signalSemaphores;
     
@@ -936,8 +1397,9 @@ extern "C" void heidic_draw_cube(float x, float y, float z, float rx, float ry, 
 
 // DRAW LINES
 extern "C" void heidic_draw_line(float x1, float y1, float z1, float x2, float y2, float z2, float r, float g, float b) {
-    Vertex v1 = {{x1, y1, z1}, {r, g, b}};
-    Vertex v2 = {{x2, y2, z2}, {r, g, b}};
+    // Lines use vertex colors, not textures
+    Vertex v1 = {{x1, y1, z1}, {0.0f, 0.0f}, {r, g, b}};
+    Vertex v2 = {{x2, y2, z2}, {0.0f, 0.0f}, {r, g, b}};
     g_lineVertices.push_back(v1);
     g_lineVertices.push_back(v2);
 }
@@ -1030,6 +1492,274 @@ extern "C" float heidic_sin(float radians) {
 extern "C" float heidic_cos(float radians) {
     return std::cos(radians);
 }
+
+// Mesh storage
+struct Mesh {
+    std::vector<Vertex> vertices;
+    VkBuffer vertexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory vertexMemory = VK_NULL_HANDLE;
+    uint32_t vertexCount = 0;
+};
+
+static std::vector<Mesh> g_meshes;
+static int g_nextMeshId = 0;
+
+// ASCII Model Loader
+extern "C" int heidic_load_ascii_model(const char* filename) {
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        // Try relative paths
+        std::vector<std::string> paths = {
+            std::string(filename),
+            std::string("../") + filename,
+            std::string("models/") + filename,
+            std::string("../models/") + filename
+        };
+        bool opened = false;
+        for (const auto& path : paths) {
+            file.open(path);
+            if (file.is_open()) {
+                opened = true;
+                break;
+            }
+        }
+        if (!opened) {
+            std::cerr << "Failed to open model file: " << filename << std::endl;
+            return -1;
+        }
+    }
+    
+    Mesh mesh;
+    std::vector<glm::vec3> positions;
+    std::vector<glm::vec2> uvs;
+    std::vector<std::vector<int>> triangles; // vertex indices
+    std::vector<std::vector<int>> uvTriangles; // UV indices
+    
+    std::string line;
+    bool inGroup = false;
+    bool readingVertices = false;
+    bool readingTriangles = false;
+    bool readingSkinPoints = false;
+    bool readingSkinTriangles = false;
+    int vertexCount = 0;
+    int triangleCount = 0;
+    int uvCount = 0;
+    int skinTriangleCount = 0;
+    int currentTriangle = 0;
+    
+    while (std::getline(file, line)) {
+        // Trim whitespace safely
+        size_t start = line.find_first_not_of(" \t\r\n");
+        if (start == std::string::npos) continue;
+        size_t end = line.find_last_not_of(" \t\r\n");
+        line = line.substr(start, end - start + 1);
+        
+        if (line.empty()) continue;
+        
+        // Check for sections
+        if (line.find("Vertices:") == 0) {
+            sscanf(line.c_str(), "Vertices: %d;", &vertexCount);
+            readingVertices = true;
+            readingTriangles = false;
+            readingSkinPoints = false;
+            readingSkinTriangles = false;
+            positions.clear();
+            continue;
+        }
+        
+        if (line.find("Triangles:") == 0) {
+            sscanf(line.c_str(), "Triangles: %d;", &triangleCount);
+            readingVertices = false;
+            readingTriangles = true;
+            readingSkinPoints = false;
+            readingSkinTriangles = false;
+            triangles.clear();
+            continue;
+        }
+        
+        if (line.find("SkinPoints:") == 0) {
+            sscanf(line.c_str(), "SkinPoints: %d;", &uvCount);
+            readingVertices = false;
+            readingTriangles = false;
+            readingSkinPoints = true;
+            readingSkinTriangles = false;
+            uvs.clear();
+            continue;
+        }
+        
+        if (line.find("SkinTriangles:") == 0) {
+            sscanf(line.c_str(), "SkinTriangles: %d;", &skinTriangleCount);
+            readingVertices = false;
+            readingTriangles = false;
+            readingSkinPoints = false;
+            readingSkinTriangles = true;
+            uvTriangles.clear();
+            currentTriangle = 0;
+            continue;
+        }
+        
+        // Parse vertices
+        if (readingVertices && !line.empty() && line.back() == ';') {
+            float x, y, z;
+            if (sscanf(line.c_str(), "%f %f %f;", &x, &y, &z) == 3) {
+                positions.push_back(glm::vec3(x, y, z));
+            }
+        }
+        
+        // Parse triangles
+        if (readingTriangles && !line.empty() && line.back() == ';') {
+            int v1, v2, v3;
+            if (sscanf(line.c_str(), "%d %d %d;", &v1, &v2, &v3) == 3) {
+                triangles.push_back({v1, v2, v3});
+            }
+        }
+        
+        // Parse UVs
+        if (readingSkinPoints && !line.empty() && line.back() == ';') {
+            float u, v;
+            if (sscanf(line.c_str(), "%f %f;", &u, &v) == 2) {
+                uvs.push_back(glm::vec2(u, v));
+            }
+        }
+        
+        // Parse UV triangles
+        if (readingSkinTriangles && !line.empty() && line.back() == ';') {
+            int triIdx, uv1, uv2, uv3;
+            if (sscanf(line.c_str(), "%d, %d %d %d;", &triIdx, &uv1, &uv2, &uv3) == 4) {
+                uvTriangles.push_back({uv1, uv2, uv3});
+            }
+        }
+    }
+    
+    file.close();
+    
+    // Build vertex buffer from positions, triangles, and UVs
+    // Note: Imported model units are assumed to be meters; EDEN uses centimeters (1 unit = 1 cm)
+    // So we scale positions by 100.0 to bring them into world scale.
+    const float POSITION_SCALE = 100.0f;
+    for (size_t i = 0; i < triangles.size(); i++) {
+        const auto& tri = triangles[i];
+        const auto& uvTri = (i < uvTriangles.size()) ? uvTriangles[i] : std::vector<int>{0, 0, 0};
+        
+        for (int j = 0; j < 3; j++) {
+            Vertex v;
+            int vIdx = tri[j];
+            int uvIdx = (j < (int)uvTri.size()) ? uvTri[j] : 0;
+            
+            if (vIdx < static_cast<int>(positions.size())) {
+                v.pos[0] = positions[vIdx].x * POSITION_SCALE;
+                v.pos[1] = positions[vIdx].y * POSITION_SCALE;
+                v.pos[2] = positions[vIdx].z * POSITION_SCALE;
+            } else {
+                v.pos[0] = v.pos[1] = v.pos[2] = 0.0f;
+            }
+            
+            if (uvIdx < static_cast<int>(uvs.size())) {
+                v.uv[0] = uvs[uvIdx].x;
+                v.uv[1] = 1.0f - uvs[uvIdx].y; // Flip V for Vulkan
+            } else {
+                v.uv[0] = 0.0f;
+                v.uv[1] = 0.0f;
+            }
+            
+            // Set color to white for textured meshes (so texture * white = texture)
+            v.color[0] = 1.0f;
+            v.color[1] = 1.0f;
+            v.color[2] = 1.0f;
+            
+            mesh.vertices.push_back(v);
+        }
+    }
+    
+    mesh.vertexCount = static_cast<uint32_t>(mesh.vertices.size());
+    
+    if (mesh.vertexCount == 0) {
+        std::cerr << "No vertices loaded from model: " << filename << std::endl;
+        return -1;
+    }
+    
+    // Create vertex buffer
+    VkDeviceSize bufferSize = sizeof(Vertex) * mesh.vertices.size();
+    
+    VkBuffer stagingBuffer;
+    VkDeviceMemory stagingBufferMemory;
+    createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
+    
+    void* data;
+    vkMapMemory(g_device, stagingBufferMemory, 0, bufferSize, 0, &data);
+    memcpy(data, mesh.vertices.data(), (size_t)bufferSize);
+    vkUnmapMemory(g_device, stagingBufferMemory);
+    
+    createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, mesh.vertexBuffer, mesh.vertexMemory);
+    
+    VkCommandBufferAllocateInfo allocInfo = {};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandPool = g_commandPool;
+    allocInfo.commandBufferCount = 1;
+    
+    VkCommandBuffer commandBuffer;
+    vkAllocateCommandBuffers(g_device, &allocInfo, &commandBuffer);
+    
+    VkCommandBufferBeginInfo beginInfo = {};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    
+    vkBeginCommandBuffer(commandBuffer, &beginInfo);
+    
+    VkBufferCopy copyRegion = {};
+    copyRegion.size = bufferSize;
+    vkCmdCopyBuffer(commandBuffer, stagingBuffer, mesh.vertexBuffer, 1, &copyRegion);
+    
+    vkEndCommandBuffer(commandBuffer);
+    
+    VkSubmitInfo submitInfo = {};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &commandBuffer;
+    
+    vkQueueSubmit(g_graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(g_graphicsQueue);
+    
+    vkFreeCommandBuffers(g_device, g_commandPool, 1, &commandBuffer);
+    vkDestroyBuffer(g_device, stagingBuffer, nullptr);
+    vkFreeMemory(g_device, stagingBufferMemory, nullptr);
+    
+    int meshId = g_nextMeshId++;
+    g_meshes.push_back(mesh);
+    
+    std::cout << "Loaded mesh " << meshId << " with " << mesh.vertexCount << " vertices from " << filename << std::endl;
+    return meshId;
+}
+
+extern "C" void heidic_draw_mesh(int mesh_id, float x, float y, float z, float rx, float ry, float rz) {
+    if (mesh_id < 0 || mesh_id >= static_cast<int>(g_meshes.size())) {
+        return;
+    }
+    
+    Mesh& mesh = g_meshes[mesh_id];
+    if (mesh.vertexCount == 0) return;
+    
+    // Construct Model Matrix
+    glm::mat4 model = glm::mat4(1.0f);
+    model = glm::translate(model, glm::vec3(x, y, z));
+    model = glm::rotate(model, glm::radians(rx), glm::vec3(1.0f, 0.0f, 0.0f));
+    model = glm::rotate(model, glm::radians(ry), glm::vec3(0.0f, 1.0f, 0.0f));
+    model = glm::rotate(model, glm::radians(rz), glm::vec3(0.0f, 0.0f, 1.0f));
+    
+    PushConsts push = {model};
+    VkCommandBuffer cb = g_commandBuffers[g_currentFrame];
+    vkCmdPushConstants(cb, g_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConsts), &push);
+    
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_pipeline);
+    
+    VkBuffer vertexBuffers[] = {mesh.vertexBuffer};
+    VkDeviceSize offsets[] = {0};
+    vkCmdBindVertexBuffers(cb, 0, 1, vertexBuffers, offsets);
+    
+    vkCmdDraw(cb, mesh.vertexCount, 1, 0, 0);
+}
+
 extern "C" void heidic_sleep_ms(int ms) {
     std::this_thread::sleep_for(std::chrono::milliseconds(ms));
 }

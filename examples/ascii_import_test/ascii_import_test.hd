@@ -1,0 +1,100 @@
+// EDEN ENGINE - ASCII Model Import Test
+// Features: Load and display ASCII model format
+
+// Extern Declarations
+extern fn heidic_glfw_vulkan_hints(): void;
+extern fn heidic_init_renderer(window: GLFWwindow): i32;
+extern fn heidic_cleanup_renderer(): void;
+extern fn heidic_window_should_close(window: GLFWwindow): i32;
+extern fn heidic_poll_events(): void;
+extern fn heidic_is_key_pressed(window: GLFWwindow, key: i32): i32;
+
+extern fn heidic_begin_frame(): void;
+extern fn heidic_end_frame(): void;
+
+extern fn heidic_update_camera(px: f32, py: f32, pz: f32, rx: f32, ry: f32, rz: f32): void;
+
+extern fn heidic_load_ascii_model(filename: string): i32;
+extern fn heidic_draw_mesh(mesh_id: i32, x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32): void;
+
+// GLFW Wrappers
+extern fn heidic_glfw_init(): i32;
+extern fn heidic_create_window(width: i32, height: i32, title: string): GLFWwindow;
+extern fn heidic_glfw_terminate(): void;
+extern fn heidic_destroy_window(window: GLFWwindow): void;
+extern fn heidic_set_window_should_close(window: GLFWwindow, value: i32): void;
+
+fn main(): void {
+    print("Initializing GLFW...\n");
+    if heidic_glfw_init() == 0 {
+        return;
+    }
+    
+    heidic_glfw_vulkan_hints();
+    let window: GLFWwindow = heidic_create_window(1280, 720, "EDEN ENGINE - ASCII Import Test");
+    
+    if heidic_init_renderer(window) == 0 {
+        heidic_glfw_terminate();
+        return;
+    }
+    
+    // Load the model
+    print("Loading model...\n");
+    let mesh_id: i32 = heidic_load_ascii_model("../models/test.txt");
+    if mesh_id < 0 {
+        print("Failed to load model!\n");
+        heidic_cleanup_renderer();
+        heidic_destroy_window(window);
+        heidic_glfw_terminate();
+        return;
+    }
+    
+    print("Model loaded successfully!\n");
+    
+    // Camera at (0, 0, 300) looking at origin
+    let cam_x: f32 = 0.0;
+    let cam_y: f32 = 0.0;
+    let cam_z: f32 = 300.0;
+    let cam_rx: f32 = 0.0;
+    let cam_ry: f32 = 0.0;
+    let cam_rz: f32 = 0.0;
+    
+    // Model at origin, rotating around Y
+    let model_x: f32 = 0.0;
+    let model_y: f32 = 0.0;
+    let model_z: f32 = 0.0;
+    let model_rx: f32 = 0.0;
+    let model_ry: f32 = 0.0;
+    let model_rz: f32 = 0.0;
+    
+    // Rotation speed
+    let rot_speed: f32 = 1.0;
+    
+    print("Starting loop...\n");
+    
+    while heidic_window_should_close(window) == 0 {
+        heidic_poll_events();
+        
+        if heidic_is_key_pressed(window, 256) == 1 { // ESC
+            heidic_set_window_should_close(window, 1);
+        }
+        
+        // Rotate model around Y axis
+        model_ry = model_ry + rot_speed;
+        
+        heidic_begin_frame();
+        
+        // Update Camera
+        heidic_update_camera(cam_x, cam_y, cam_z, cam_rx, cam_ry, cam_rz);
+        
+        // Draw Mesh
+        heidic_draw_mesh(mesh_id, model_x, model_y, model_z, model_rx, model_ry, model_rz);
+        
+        heidic_end_frame();
+    }
+    
+    heidic_cleanup_renderer();
+    heidic_destroy_window(window);
+    heidic_glfw_terminate();
+}
+

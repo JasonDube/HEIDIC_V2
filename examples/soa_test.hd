@@ -1,0 +1,36 @@
+// SOA (Structure-of-Arrays) example for HEIDIC
+// This demonstrates SOA syntax for both mesh data and ECS components
+
+// SOA mesh data - optimized for CUDA/OptiX ray tracing
+mesh_soa Mesh {
+    positions: [Vec3],
+    uvs: [Vec2],
+    colors: [Vec3],
+    indices: [i32]
+}
+
+// SOA component - optimized for ECS iteration
+component_soa Velocity {
+    x: [f32],
+    y: [f32],
+    z: [f32]
+}
+
+// Regular component for comparison (AOS - Array of Structs)
+component Position {
+    x: f32,
+    y: f32,
+    z: f32
+}
+
+fn main() {
+    // SOA mesh example
+    // In SOA format, each field is a separate array
+    // mesh.positions[0], mesh.uvs[0], mesh.colors[0] all refer to vertex 0
+    
+    // SOA component example
+    // In SOA format: velocities.x[i], velocities.y[i], velocities.z[i] for entity i
+    // This is cache-friendly when iterating over all entities
+    print("SOA types defined successfully");
+}
+
