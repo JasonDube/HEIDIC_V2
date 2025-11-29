@@ -1,5 +1,8 @@
 use crate::ast::*;
-use anyhow::Result;
+use anyhow::{Result, Context};
+use std::fs;
+use std::path::Path;
+use std::process::Command;
 
 pub struct CodeGenerator;
 
@@ -34,6 +37,22 @@ impl CodeGenerator {
             if let Item::TypeAlias(alias) = item {
                 output.push_str(&self.generate_type_alias(alias));
             }
+        }
+        
+        // Compile and embed shaders first (before other code generation)
+        let mut shaders = Vec::new();
+        for item in &program.items {
+            if let Item::Shader(s) = item {
+                shaders.push(s.clone());
+            }
+        }
+        
+        if !shaders.is_empty() {
+            output.push_str("// Embedded Shaders (compiled to SPIR-V at compile-time)\n");
+            for shader in &shaders {
+                output.push_str(&self.generate_shader(shader)?);
+            }
+            output.push_str("\n");
         }
         
         // Generate structs, components, and SOA types
@@ -549,10 +568,115 @@ impl CodeGenerator {
             Type::Vec3 => "Vec3".to_string(),
             Type::Vec4 => "Vec4".to_string(),
             Type::Mat4 => "Mat4".to_string(),
+            Type::Shader(name) => name.clone(),
         }
     }
     
     fn indent(&self, level: usize) -> String {
         "    ".repeat(level)
+    }
+    
+    fn generate_shader(&self, shader: &ShaderDef) -> Result<String> {
+        let mut output = String::new();
+        
+        // Determine glslc shader stage flag
+        let stage_flag = match shader.stage {
+            ShaderStage::Vertex => "vertex",
+            ShaderStage::Fragment => "fragment",
+            ShaderStage::Compute => "compute",
+            ShaderStage::Geometry => "geometry",
+            ShaderStage::TessellationControl => "tessellationControl",
+            ShaderStage::TessellationEvaluation => "tessellationEvaluation",
+        };
+        
+        // Find shader source file
+        let shader_path = Path::new(&shader.path);
+        let mut found_path = None;
+        
+        if shader_path.exists() {
+            found_path = Some(shader_path.to_path_buf());
+        } else {
+            // Try relative paths
+            let possible_paths = vec![
+                shader_path.to_path_buf(),
+                Path::new("shaders").join(shader_path.file_name().unwrap_or_default()),
+                Path::new("../shaders").join(shader_path.file_name().unwrap_or_default()),
+            ];
+            
+            for path in &possible_paths {
+                if path.exists() {
+                    found_path = Some(path.clone());
+                    break;
+                }
+            }
+        }
+        
+        if let Some(path) = found_path {
+                // Compile shader to SPIR-V
+                let spv_path = path.with_extension("spv");
+                
+                // Run glslc to compile shader
+                let output_cmd = Command::new("glslc")
+                    .arg("-fshader-stage")
+                    .arg(stage_flag)
+                    .arg(&path)
+                    .arg("-o")
+                    .arg(&spv_path)
+                    .output()
+                    .with_context(|| format!("Failed to run glslc. Make sure glslc is in PATH. Shader: {}", shader.path))?;
+                
+                if !output_cmd.status.success() {
+                    let stderr = String::from_utf8_lossy(&output_cmd.stderr);
+                    anyhow::bail!("Shader compilation failed for {}:\n{}", shader.path, stderr);
+                }
+                
+                // Read SPIR-V bytecode
+                let spirv_bytes = fs::read(&spv_path)
+                    .with_context(|| format!("Failed to read compiled SPIR-V file: {}", spv_path.display()))?;
+                
+                // Generate C++ code with embedded SPIR-V
+                output.push_str(&format!("// Shader: {} ({} stage)\n", shader.name, stage_flag));
+                output.push_str(&format!("static const uint8_t {}_spirv[] = {{\n", shader.name));
+                
+                // Write bytes in hex format
+                for (i, byte) in spirv_bytes.iter().enumerate() {
+                    if i % 16 == 0 {
+                        output.push_str("    ");
+                    }
+                    output.push_str(&format!("0x{:02x},", byte));
+                    if i % 16 == 15 || i == spirv_bytes.len() - 1 {
+                        output.push_str("\n");
+                    } else {
+                        output.push_str(" ");
+                    }
+                }
+                
+                output.push_str("};\n");
+                output.push_str(&format!("static const size_t {}_spirv_size = sizeof({}_spirv);\n\n", 
+                    shader.name, shader.name));
+                
+                // Generate helper function to load shader
+                output.push_str(&format!(
+                    "// Helper function to load {} shader\n",
+                    shader.name
+                ));
+                output.push_str(&format!(
+                    "inline std::vector<uint32_t> load_{}_shader() {{\n",
+                    shader.name
+                ));
+                output.push_str(&format!(
+                    "    return std::vector<uint32_t>(reinterpret_cast<const uint32_t*>({}_spirv),\n",
+                    shader.name
+                ));
+                output.push_str(&format!(
+                    "        reinterpret_cast<const uint32_t*>({}_spirv) + ({}_spirv_size / sizeof(uint32_t)));\n",
+                    shader.name, shader.name
+                ));
+                output.push_str("}\n\n");
+        } else {
+            anyhow::bail!("Shader file not found: {}", shader.path);
+        }
+        
+        Ok(output)
     }
 }

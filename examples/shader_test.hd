@@ -1,0 +1,16 @@
+// Test compile-time shader embedding
+// Note: This requires glslc to be in PATH and shader source files to exist
+
+shader vertex "examples/top_down/vert_cube.glsl" {
+    // This shader will be compiled to SPIR-V and embedded at compile-time
+}
+
+shader fragment "examples/top_down/frag_cube.glsl" {
+    // This shader will be compiled to SPIR-V and embedded at compile-time
+}
+
+fn main(): void {
+    print("Shaders embedded successfully!\n");
+    print("Use load_vert_cube_shader() and load_frag_cube_shader() to load them.\n");
+}
+

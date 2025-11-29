@@ -11,6 +11,7 @@ pub enum Type {
     Component(String),
     MeshSOA(String),
     ComponentSOA(String),
+    Shader(String),
     Void,
     // Vulkan types
     VkInstance,
@@ -51,6 +52,7 @@ pub enum Item {
     Component(ComponentDef),
     MeshSOA(MeshSOADef),
     ComponentSOA(ComponentSOADef),
+    Shader(ShaderDef),
     System(SystemDef),
     Function(FunctionDef),
     ExternFunction(ExternFunctionDef),
@@ -85,6 +87,23 @@ pub struct MeshSOADef {
 pub struct ComponentSOADef {
     pub name: String,
     pub fields: Vec<Field>, // All fields must be array types
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ShaderStage {
+    Vertex,
+    Fragment,
+    Compute,
+    Geometry,
+    TessellationControl,
+    TessellationEvaluation,
+}
+
+#[derive(Debug, Clone)]
+pub struct ShaderDef {
+    pub name: String,
+    pub stage: ShaderStage,
+    pub path: String, // Path to shader source file
 }
 
 #[derive(Debug, Clone)]

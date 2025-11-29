@@ -40,6 +40,20 @@ pub enum Token {
     MeshSOA,
     #[token("component_soa")]
     ComponentSOA,
+    #[token("shader")]
+    Shader,
+    #[token("vertex")]
+    Vertex,
+    #[token("fragment")]
+    Fragment,
+    #[token("compute")]
+    Compute,
+    #[token("geometry")]
+    Geometry,
+    #[token("tessellation_control")]
+    TessellationControl,
+    #[token("tessellation_evaluation")]
+    TessellationEvaluation,
     
     // Types
     #[token("i32")]

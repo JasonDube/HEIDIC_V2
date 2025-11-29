@@ -43,6 +43,10 @@ impl Parser {
                 self.advance();
                 Ok(Item::ComponentSOA(self.parse_component_soa()?))
             }
+            Token::Shader => {
+                self.advance();
+                Ok(Item::Shader(self.parse_shader()?))
+            }
             Token::System => {
                 self.advance();
                 Ok(Item::System(self.parse_system()?))
@@ -133,6 +137,61 @@ impl Parser {
         self.expect(&Token::RBrace)?;
         
         Ok(ComponentSOADef { name, fields })
+    }
+    
+    fn parse_shader(&mut self) -> Result<ShaderDef> {
+        // Parse shader stage
+        let stage = match self.peek() {
+            Token::Vertex => {
+                self.advance();
+                ShaderStage::Vertex
+            }
+            Token::Fragment => {
+                self.advance();
+                ShaderStage::Fragment
+            }
+            Token::Compute => {
+                self.advance();
+                ShaderStage::Compute
+            }
+            Token::Geometry => {
+                self.advance();
+                ShaderStage::Geometry
+            }
+            Token::TessellationControl => {
+                self.advance();
+                ShaderStage::TessellationControl
+            }
+            Token::TessellationEvaluation => {
+                self.advance();
+                ShaderStage::TessellationEvaluation
+            }
+            _ => bail!("Expected shader stage (vertex, fragment, compute, etc.), got {:?}", self.peek()),
+        };
+        
+        // Parse shader name
+        let name = self.expect_ident()?;
+        
+        // Parse shader path (string literal)
+        let path = if let Token::StringLit(ref path_str) = *self.peek() {
+            let path = path_str.clone();
+            self.advance();
+            path
+        } else {
+            bail!("Expected string literal for shader path, got {:?}", self.peek());
+        };
+        
+        // Parse optional block (for future metadata)
+        if self.check(&Token::LBrace) {
+            self.advance();
+            // Skip block content for now (just consume it)
+            while !self.check(&Token::RBrace) {
+                self.advance();
+            }
+            self.expect(&Token::RBrace)?;
+        }
+        
+        Ok(ShaderDef { name, stage, path })
     }
     
     fn parse_system(&mut self) -> Result<SystemDef> {

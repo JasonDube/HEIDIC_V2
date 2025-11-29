@@ -9,6 +9,7 @@ pub struct TypeChecker {
     components: HashMap<String, ComponentDef>,
     mesh_soas: HashMap<String, MeshSOADef>,
     component_soas: HashMap<String, ComponentSOADef>,
+    shaders: HashMap<String, ShaderDef>,
     type_aliases: HashMap<String, TypeAliasDef>,
 }
 
@@ -21,6 +22,7 @@ impl TypeChecker {
             components: HashMap::new(),
             mesh_soas: HashMap::new(),
             component_soas: HashMap::new(),
+            shaders: HashMap::new(),
             type_aliases: HashMap::new(),
         }
     }
@@ -52,6 +54,13 @@ impl TypeChecker {
                         }
                     }
                     self.component_soas.insert(c.name.clone(), c.clone());
+                }
+                Item::Shader(s) => {
+                    // Validate shader path exists (basic check - file existence checked at codegen time)
+                    if s.path.is_empty() {
+                        bail!("Shader '{}' must have a non-empty path", s.name);
+                    }
+                    self.shaders.insert(s.name.clone(), s.clone());
                 }
                 Item::Function(f) => {
                     self.functions.insert(f.name.clone(), f.clone());
@@ -419,6 +428,7 @@ impl TypeChecker {
             (Type::Component(a), Type::Component(b)) => a == b,
             (Type::MeshSOA(a), Type::MeshSOA(b)) => a == b,
             (Type::ComponentSOA(a), Type::ComponentSOA(b)) => a == b,
+            (Type::Shader(a), Type::Shader(b)) => a == b,
             // Vulkan types
             (Type::VkInstance, Type::VkInstance) => true,
             (Type::VkDevice, Type::VkDevice) => true,

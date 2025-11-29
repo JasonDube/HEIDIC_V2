@@ -18,10 +18,12 @@ This document tracks language feature improvements and enhancements for HEIDIC_v
   - Priority: High
   - Effort: ~1-2 days
 
-- [ ] **Compile-Time Shader Embedding** - `shader vertex "shaders/triangle.vert"`
-  - Status: Not started
-  - Priority: High
-  - Effort: ~2-3 days
+- [x] **Compile-Time Shader Embedding** - `shader vertex "shaders/triangle.vert"`
+  - Status: ✅ Completed
+  - Implementation: Added `shader` keyword, shader stage keywords (vertex, fragment, compute, etc.), `ShaderDef` to AST, parser support, type checking, and codegen that compiles shaders with glslc and embeds SPIR-V bytecode as const arrays
+  - Syntax: `shader vertex "path/to/shader.glsl" { }`
+  - Generated as: Embedded SPIR-V bytecode arrays with helper functions `load_<name>_shader()` to load them
+  - Requirements: glslc must be in PATH
 
 - [ ] **Frame-Scoped Memory (FrameArena)** - `frame.alloc_array<Vec3>(count)`
   - Status: Not started
