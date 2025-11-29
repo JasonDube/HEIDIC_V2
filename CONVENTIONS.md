@@ -33,10 +33,18 @@ While the engine logic uses Y-Up (Right-Handed), the Vulkan backend uses a diffe
 
 ## Units and Measurements
 
-Unless otherwise specified, EDEN ENGINE uses metric units:
-- **Distance**: Meters (1.0 = 1 meter)
-- **Angle**: Radians (GLM functions expect radians)
-- **Time**: Seconds
+### Distance
+- **1 Unit = 1 Centimeter**
+- 100 Units = 1 Meter
+- 1000 Units = 10 Meters
+
+### Rotation
+- All rotations are specified in **Degrees**.
+- Rotations are applied in standard Euler order (typically Y, X, Z or as needed) or via Quaternions internally.
+- Naming convention: `x rotation`, `y rotation`, `z rotation`.
+
+### Time
+- Seconds
 
 ---
 
@@ -59,4 +67,3 @@ Unity uses **Y-Up, Left-Handed**.
 ### Unreal Engine
 Unreal uses **Z-Up, Left-Handed**.
 - **Difference**: Both the Up axis and Handedness differ. Requires significant conversion (swapping Y/Z and inverting an axis).
-

@@ -26,7 +26,7 @@ impl CodeGenerator {
         output.push_str("#include \"stdlib/vulkan.h\"\n");
         output.push_str("#include \"stdlib/glfw.h\"\n");
         output.push_str("#include \"stdlib/math.h\"\n");
-        output.push_str("#include \"stdlib/imgui.h\"\n");
+        output.push_str("#include \"stdlib/eden_imgui.h\"\n");
         output.push_str("\n");
         
         // Generate structs and components
@@ -47,14 +47,14 @@ impl CodeGenerator {
         for item in &program.items {
             if let Item::ExternFunction(ext) = item {
                 output.push_str("extern \"C\" {\n");
-                let return_type = self.type_to_cpp(&ext.return_type);
+                let return_type = self.type_to_cpp_extern(&ext.return_type);
                 output.push_str(&format!("    {} {}(", return_type, ext.name));
                 for (i, param) in ext.params.iter().enumerate() {
                     if i > 0 {
                         output.push_str(", ");
                     }
                     output.push_str(&format!("{} {}", 
-                        self.type_to_cpp(&param.ty), 
+                        self.type_to_cpp_extern(&param.ty), 
                         param.name));
                 }
                 output.push_str(");\n");
@@ -368,14 +368,7 @@ impl CodeGenerator {
                         output.push_str(", ");
                     }
                     let arg_expr = self.generate_expression(arg);
-                    // Handle string literals for GLFW functions that need const char*
-                    if (name == "glfwCreateWindow" && i == 2) || 
-                       (name == "glfwSetWindowTitle" && i == 1) {
-                        // String literals are fine as-is for const char*
-                        output.push_str(&arg_expr);
-                    } else {
-                        output.push_str(&arg_expr);
-                    }
+                    output.push_str(&arg_expr);
                 }
                 output.push_str(")");
                 output
@@ -407,13 +400,27 @@ impl CodeGenerator {
     }
     
     fn type_to_cpp(&self, ty: &Type) -> String {
+        self.type_to_cpp_internal(ty, false)
+    }
+
+    fn type_to_cpp_extern(&self, ty: &Type) -> String {
+        self.type_to_cpp_internal(ty, true)
+    }
+
+    fn type_to_cpp_internal(&self, ty: &Type, is_extern: bool) -> String {
         match ty {
             Type::I32 => "int32_t".to_string(),
             Type::I64 => "int64_t".to_string(),
             Type::F32 => "float".to_string(),
             Type::F64 => "double".to_string(),
             Type::Bool => "bool".to_string(),
-            Type::String => "std::string".to_string(),
+            Type::String => {
+                if is_extern {
+                    "const char*".to_string()
+                } else {
+                    "std::string".to_string()
+                }
+            },
             Type::Array(element_type) => {
                 format!("std::vector<{}>", self.type_to_cpp(element_type))
             }
@@ -453,4 +460,3 @@ impl CodeGenerator {
         "    ".repeat(level)
     }
 }
-

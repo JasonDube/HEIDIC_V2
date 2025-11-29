@@ -1,0 +1,209 @@
+// EDEN ENGINE - Top Down Example
+// Features: ImGui, Programmatic Cube, Top-Down Camera, Frame Control
+
+// Extern Declarations
+extern fn heidic_glfw_vulkan_hints(): void;
+extern fn heidic_init_renderer(window: GLFWwindow): i32;
+extern fn heidic_cleanup_renderer(): void;
+extern fn heidic_window_should_close(window: GLFWwindow): i32;
+extern fn heidic_poll_events(): void;
+extern fn heidic_is_key_pressed(window: GLFWwindow, key: i32): i32;
+
+extern fn heidic_begin_frame(): void;
+extern fn heidic_end_frame(): void;
+
+extern fn heidic_draw_cube(x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32, sx: f32, sy: f32, sz: f32): void;
+extern fn heidic_draw_line(x1: f32, y1: f32, z1: f32, x2: f32, y2: f32, z2: f32, r: f32, g: f32, b: f32): void;
+extern fn heidic_draw_model_origin(x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32, length: f32): void;
+
+extern fn heidic_update_camera(px: f32, py: f32, pz: f32, rx: f32, ry: f32, rz: f32): void;
+
+extern fn heidic_imgui_begin(name: string): void;
+extern fn heidic_imgui_end(): void;
+extern fn heidic_imgui_text(text: string): void;
+extern fn heidic_imgui_text_float(label: string, value: f32): void;
+extern fn heidic_imgui_drag_float(label: string, v: f32, speed: f32): f32;
+
+// GLFW Wrappers to avoid signature conflicts
+extern fn heidic_glfw_init(): i32;
+extern fn heidic_create_window(width: i32, height: i32, title: string): GLFWwindow;
+extern fn heidic_glfw_terminate(): void;
+extern fn heidic_destroy_window(window: GLFWwindow): void;
+extern fn heidic_set_window_should_close(window: GLFWwindow, value: i32): void;
+extern fn heidic_get_key(window: GLFWwindow, key: i32): i32;
+
+// Math Functions
+extern fn heidic_convert_degrees_to_radians(degrees: f32): f32;
+extern fn heidic_sin(radians: f32): f32;
+extern fn heidic_cos(radians: f32): f32;
+
+fn main(): void {
+    print("Initializing GLFW...\n");
+    if heidic_glfw_init() == 0 {
+        return;
+    }
+    
+    heidic_glfw_vulkan_hints();
+    let window: GLFWwindow = heidic_create_window(1280, 720, "EDEN ENGINE - Top Down");
+    
+    if heidic_init_renderer(window) == 0 {
+        heidic_glfw_terminate();
+        return;
+    }
+    
+    // Camera State (1 Unit = 1 cm)
+    // 1000 cm = 10 meters up
+    let cam_x: f32 = 0.0;
+    let cam_y: f32 = 1000.0; 
+    let cam_z: f32 = 0.0;
+    
+    let cam_rx: f32 = -90.0; // Looking straight down
+    let cam_ry: f32 = 0.0;
+    let cam_rz: f32 = 0.0;
+    
+    // Cube State
+    let cube_x: f32 = 0.0;
+    let cube_y: f32 = 0.0;
+    let cube_z: f32 = 0.0;
+    
+    let cube_rx: f32 = 0.0;
+    let cube_ry: f32 = 0.0;
+    let cube_rz: f32 = 0.0;
+    
+    // Cube Size (100 cm = 1 meter)
+    let cube_sx: f32 = 100.0;
+    let cube_sy: f32 = 100.0;
+    let cube_sz: f32 = 100.0;
+    
+    // Movement Speed (cm per frame)
+    let move_speed: f32 = 5.0;
+    
+    // Rotation Speed (degrees per frame)
+    let rot_speed: f32 = 2.0;
+    
+    // Debug UI State
+    let show_debug: i32 = 1;
+    let f1_was_pressed: i32 = 0;
+    
+    print("Starting loop...\n");
+    
+    while heidic_window_should_close(window) == 0 {
+        heidic_poll_events();
+        
+        if heidic_is_key_pressed(window, 256) == 1 { // ESC
+            heidic_set_window_should_close(window, 1);
+        }
+        
+        // F1 Toggle Logic (290 is F1)
+        let f1_is_pressed: i32 = heidic_is_key_pressed(window, 290);
+        if f1_is_pressed == 1 {
+            if f1_was_pressed == 0 {
+                if show_debug == 1 {
+                    show_debug = 0;
+                } else {
+                    show_debug = 1;
+                }
+                f1_was_pressed = 1;
+            }
+        } else {
+            f1_was_pressed = 0;
+        }
+        
+        // Calculate forward and right direction vectors based on Y rotation
+        // Forward should follow the yellow line (Z-axis) direction
+        // At 0°: forward = (0, 0, -1) = negative Z (model's forward at start)
+        let rot_y_rad: f32 = heidic_convert_degrees_to_radians(cube_ry);
+        // Forward follows the rotated negative Z-axis (yellow line direction)
+        // Try: forward = (-sin(angle), 0, -cos(angle))
+        let forward_x: f32 = -heidic_sin(rot_y_rad);
+        let forward_z: f32 = -heidic_cos(rot_y_rad);
+        // Right = (cos(angle), 0, -sin(angle))
+        let right_x: f32 = heidic_cos(rot_y_rad);
+        let right_z: f32 = -heidic_sin(rot_y_rad);
+        
+        // WASD Movement Controls (relative to rotation)
+        // W = 87: move forward (in direction cube is facing)
+        if heidic_is_key_pressed(window, 87) == 1 {
+            cube_x = cube_x + forward_x * move_speed;
+            cube_z = cube_z + forward_z * move_speed;
+        }
+        // S = 83: move backward (opposite of forward)
+        if heidic_is_key_pressed(window, 83) == 1 {
+            cube_x = cube_x - forward_x * move_speed;
+            cube_z = cube_z - forward_z * move_speed;
+        }
+        // A = 65: move left (negative right direction)
+        if heidic_is_key_pressed(window, 65) == 1 {
+            cube_x = cube_x - right_x * move_speed;
+            cube_z = cube_z - right_z * move_speed;
+        }
+        // D = 68: move right (positive right direction)
+        if heidic_is_key_pressed(window, 68) == 1 {
+            cube_x = cube_x + right_x * move_speed;
+            cube_z = cube_z + right_z * move_speed;
+        }
+        
+        // Q = 81: rotate Y up (increase rotation)
+        if heidic_is_key_pressed(window, 81) == 1 {
+            cube_ry = cube_ry + rot_speed;
+        }
+        // E = 69: rotate Y down (decrease rotation)
+        if heidic_is_key_pressed(window, 69) == 1 {
+            cube_ry = cube_ry - rot_speed;
+        }
+        
+        heidic_begin_frame();
+        
+        // Update Camera
+        heidic_update_camera(cam_x, cam_y, cam_z, cam_rx, cam_ry, cam_rz);
+        
+        // Draw Cube
+        heidic_draw_cube(cube_x, cube_y, cube_z, cube_rx, cube_ry, cube_rz, cube_sx, cube_sy, cube_sz);
+        
+        // Draw Origin Lines (1 meter = 100 cm = 100 units)
+        heidic_draw_model_origin(cube_x, cube_y, cube_z, cube_rx, cube_ry, cube_rz, 100.0);
+        
+        // ImGui
+        if show_debug == 1 {
+            heidic_imgui_begin("Debug Panel (F1 to Toggle)");
+            
+            heidic_imgui_text("Camera Transform (1 unit = 1 cm)");
+            cam_x = heidic_imgui_drag_float("Cam X", cam_x, 1.0);
+            cam_y = heidic_imgui_drag_float("Cam Y", cam_y, 1.0);
+            cam_z = heidic_imgui_drag_float("Cam Z", cam_z, 1.0);
+            cam_rx = heidic_imgui_drag_float("Cam Rot X", cam_rx, 1.0);
+            cam_ry = heidic_imgui_drag_float("Cam Rot Y", cam_ry, 1.0);
+            
+            heidic_imgui_text("Cube Transform");
+            cube_x = heidic_imgui_drag_float("Cube X", cube_x, 1.0);
+            cube_y = heidic_imgui_drag_float("Cube Y", cube_y, 1.0);
+            cube_z = heidic_imgui_drag_float("Cube Z", cube_z, 1.0);
+            cube_rx = heidic_imgui_drag_float("Cube Rot X", cube_rx, 1.0);
+            cube_ry = heidic_imgui_drag_float("Cube Rot Y", cube_ry, 1.0);
+            cube_rz = heidic_imgui_drag_float("Cube Rot Z", cube_rz, 1.0);
+            cube_sx = heidic_imgui_drag_float("Cube Scale X", cube_sx, 1.0);
+            cube_sy = heidic_imgui_drag_float("Cube Scale Y", cube_sy, 1.0);
+            cube_sz = heidic_imgui_drag_float("Cube Scale Z", cube_sz, 1.0);
+            
+            // Display direction vectors
+            heidic_imgui_text("Direction Vectors (W moves in Forward direction)");
+            let debug_rot_y_rad: f32 = heidic_convert_degrees_to_radians(cube_ry);
+            let debug_forward_x: f32 = -heidic_sin(debug_rot_y_rad);
+            let debug_forward_z: f32 = -heidic_cos(debug_rot_y_rad);
+            let debug_right_x: f32 = heidic_cos(debug_rot_y_rad);
+            let debug_right_z: f32 = -heidic_sin(debug_rot_y_rad);
+            heidic_imgui_text_float("Forward X", debug_forward_x);
+            heidic_imgui_text_float("Forward Z", debug_forward_z);
+            heidic_imgui_text_float("Right X", debug_right_x);
+            heidic_imgui_text_float("Right Z", debug_right_z);
+            
+            heidic_imgui_end();
+        }
+        
+        heidic_end_frame();
+    }
+    
+    heidic_cleanup_renderer();
+    heidic_destroy_window(window);
+    heidic_glfw_terminate();
+}
