@@ -1981,6 +1981,18 @@ static bool rayAABB(const glm::vec3& rayOrigin, const glm::vec3& rayDir, const A
     // If tMin > tMax, the ray misses the AABB
     // If tMax < 0, the entire AABB is behind the ray origin
     // If tMin < 0 and tMax >= 0, the ray origin is inside the AABB (hit!)
+    
+    // DEBUG: print ray info if it hits this specific cube for debugging
+    /*
+    if (fabs(box.min.x - 2764.5f) < 1.0f) {
+        printf("[RAYCAST DEBUG] Ray Origin: (%.2f, %.2f, %.2f) Dir: (%.3f, %.3f, %.3f)\n", 
+               rayOrigin.x, rayOrigin.y, rayOrigin.z, dir.x, dir.y, dir.z);
+        printf("[RAYCAST DEBUG] Cube Min: (%.1f, %.1f, %.1f) Max: (%.1f, %.1f, %.1f)\n", 
+               box.min.x, box.min.y, box.min.z, box.max.x, box.max.y, box.max.z);
+        printf("[RAYCAST DEBUG] tMin: %.2f, tMax: %.2f\n", tMin, tMax);
+    }
+    */
+    
     return (tMax >= tMin) && (tMax >= 0.0f);
 }
 
@@ -2025,6 +2037,7 @@ extern "C" int heidic_raycast_cube_hit(GLFWwindow* window, float cubeX, float cu
     bool hit = rayAABB(rayOrigin, rayDir, cubeBox, tMin, tMax);
     
     // DEBUG: Print raycast info when testing (with AABB bounds)
+    /*
     printf("[RAYCAST DEBUG] Mouse: (%.1f, %.1f) | NDC: (%.3f, %.3f) | Ray Origin: (%.2f, %.2f, %.2f) | Ray Dir: (%.3f, %.3f, %.3f) | Cube: (%.1f, %.1f, %.1f) | AABB: min(%.1f,%.1f,%.1f) max(%.1f,%.1f,%.1f) | Hit: %s | tMin: %.2f, tMax: %.2f\n",
            mouseX, mouseY, ndc.x, ndc.y, 
            rayOrigin.x, rayOrigin.y, rayOrigin.z,
@@ -2033,6 +2046,7 @@ extern "C" int heidic_raycast_cube_hit(GLFWwindow* window, float cubeX, float cu
            cubeBox.min.x, cubeBox.min.y, cubeBox.min.z,
            cubeBox.max.x, cubeBox.max.y, cubeBox.max.z,
            hit ? "YES" : "NO", tMin, tMax);
+    */
     
     return hit ? 1 : 0;
 }
@@ -2266,6 +2280,7 @@ extern "C" void heidic_debug_print_ray(GLFWwindow* window) {
     // Calculate a point 1000 units along the ray
     glm::vec3 rayEnd = rayOrigin + rayDir * 1000.0f;
     
+    /*
     printf("=== RAYCAST DEBUG ===\n");
     printf("Mouse Screen: (%.1f, %.1f) | Framebuffer: (%d, %d)\n", mouseX, mouseY, fbWidth, fbHeight);
     printf("NDC: (%.4f, %.4f)\n", ndc.x, ndc.y);
@@ -2274,4 +2289,309 @@ extern "C" void heidic_debug_print_ray(GLFWwindow* window) {
     printf("Ray End (1000 units): (%.2f, %.2f, %.2f)\n", rayEnd.x, rayEnd.y, rayEnd.z);
     printf("Camera Pos: (%.2f, %.2f, %.2f)\n", g_currentCamPos.x, g_currentCamPos.y, g_currentCamPos.z);
     printf("====================\n");
+    */
+}
+
+// Draw the mouse ray for visual debugging
+extern "C" void heidic_draw_ray(GLFWwindow* window, float length, float r, float g, float b) {
+    if (!window) return;
+    
+    // Get mouse position
+    double mouseX, mouseY;
+    glfwGetCursorPos(window, &mouseX, &mouseY);
+    
+    // Get framebuffer size
+    int fbWidth, fbHeight;
+    glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
+    
+    // Convert to NDC
+    glm::vec2 ndc = screenToNDC((float)mouseX, (float)mouseY, fbWidth, fbHeight);
+    
+    // Unproject to get ray
+    glm::mat4 invProj = glm::inverse(g_currentProj);
+    glm::mat4 invView = glm::inverse(g_currentView);
+    glm::vec3 rayOrigin, rayDir;
+    unproject(ndc, invProj, invView, rayOrigin, rayDir);
+    
+    // Calculate end point
+    glm::vec3 rayEnd = rayOrigin + rayDir * length;
+    
+    // Draw the line
+    // We can't access heidic_draw_line directly because it's extern "C" in this same file but not declared in a header this file includes in a way C++ likes for internal calls sometimes?
+    // actually heidic_draw_line IS defined in this file. So we can just call it.
+    heidic_draw_line(rayOrigin.x, rayOrigin.y, rayOrigin.z, rayEnd.x, rayEnd.y, rayEnd.z, r, g, b);
+}
+// Gizmo State
+static int g_gizmoActiveAxis = 0; // 0=None, 1=X, 2=Y, 3=Z
+static glm::vec3 g_gizmoInitialPos;
+static float g_gizmoDragOffset = 0.0f; // Distance along axis from initial pos
+static bool g_gizmoWasMouseDown = false;
+
+// Helper: Distance between two lines
+// Line 1: P1 + t1 * V1
+// Line 2: P2 + t2 * V2
+static float closestDistanceBetweenLines(glm::vec3 P1, glm::vec3 V1, glm::vec3 P2, glm::vec3 V2, float& t1, float& t2) {
+    glm::vec3 P12 = P1 - P2;
+    float d1343 = glm::dot(P12, V2);
+    float d4321 = glm::dot(V2, V1);
+    float d1321 = glm::dot(P12, V1);
+    float d4343 = glm::dot(V2, V2);
+    float d2121 = glm::dot(V1, V1);
+
+    float denom = d2121 * d4343 - d4321 * d4321;
+    float numer = d1343 * d4321 - d1321 * d4343;
+
+    if (fabs(denom) < 1e-6f) {
+        t1 = 0.0f;
+        t2 = 0.0f; // Parallel
+        return glm::length(P1 - P2); // Distance between origins roughly
+    }
+
+    t1 = numer / denom;
+    t2 = (d1343 + d4321 * t1) / d4343;
+
+    glm::vec3 Pa = P1 + t1 * V1;
+    glm::vec3 Pb = P2 + t2 * V2;
+    return glm::length(Pa - Pb);
+}
+
+// Draw translation gizmo and handle interaction
+extern "C" Vec3 heidic_gizmo_translate(GLFWwindow* window, float x, float y, float z) {
+    Vec3 result = {x, y, z};
+    if (!window) return result;
+    
+    // Gizmo configuration
+    float axisLen = 100.0f;
+    float axisThick = 5.0f;
+    
+    // Mouse state
+    bool mouseDown = (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS);
+    bool justClicked = mouseDown && !g_gizmoWasMouseDown;
+    
+    // Get mouse ray
+    Vec3 ro = heidic_get_mouse_ray_origin(window);
+    Vec3 rd = heidic_get_mouse_ray_dir(window);
+    glm::vec3 rayOrigin(ro.x, ro.y, ro.z);
+    glm::vec3 rayDir(rd.x, rd.y, rd.z);
+    glm::vec3 gizmoPos(x, y, z);
+    
+    // Axes directions
+    glm::vec3 axes[] = {
+        glm::vec3(1,0,0), // X
+        glm::vec3(0,1,0), // Y
+        glm::vec3(0,0,1)  // Z
+    };
+    
+    // Colors
+    float colors[3][3] = {
+        {1,0,0}, {0,1,0}, {0,0,1} // R, G, B
+    };
+    
+    // Hit testing (only if not dragging)
+    int hoveredAxis = 0;
+    
+    // If not dragging, check for hover
+    if (g_gizmoActiveAxis == 0) {
+        float minDist = 1e9f;
+        
+        for (int i = 0; i < 3; i++) {
+            // Calculate closest point on axis line to ray
+            float tRay, tAxis;
+            float dist = closestDistanceBetweenLines(rayOrigin, rayDir, gizmoPos, axes[i], tRay, tAxis);
+            
+            // Hit logic:
+            // 1. Distance must be within "thickness" (cylindrical check)
+            // 2. Point on axis must be positive (0 to axisLen)
+            if (dist < axisThick * 2.0f && tAxis > 0.0f && tAxis < axisLen) {
+                // Determine depth (distance along ray)
+                if (tRay > 0.0f && tRay < minDist) {
+                    minDist = tRay;
+                    hoveredAxis = i + 1;
+                }
+            }
+        }
+    } else {
+        hoveredAxis = g_gizmoActiveAxis;
+    }
+    
+    // Drawing
+    for (int i = 0; i < 3; i++) {
+        float r = colors[i][0];
+        float g = colors[i][1];
+        float b = colors[i][2];
+        
+        // Highlight if hovered or active
+        if (hoveredAxis == i + 1) {
+            r = glm::min(r + 0.5f, 1.0f);
+            g = glm::min(g + 0.5f, 1.0f);
+            b = glm::min(b + 0.5f, 1.0f);
+        }
+        
+        // Draw Axis (Wireframe Box)
+        // Center position for the box
+        float len = axisLen;
+        float th = axisThick;
+        
+        float cx = x + axes[i].x * len * 0.5f;
+        float cy = y + axes[i].y * len * 0.5f;
+        float cz = z + axes[i].z * len * 0.5f;
+        
+        float sx = (i==0) ? len : th;
+        float sy = (i==1) ? len : th;
+        float sz = (i==2) ? len : th;
+        
+        heidic_draw_cube_wireframe(cx, cy, cz, 0, 0, 0, sx, sy, sz, r, g, b);
+    }
+    
+    // Interaction Logic
+    if (justClicked && hoveredAxis > 0) {
+        g_gizmoActiveAxis = hoveredAxis;
+        g_gizmoInitialPos = gizmoPos;
+        
+        // Calculate initial offset on axis
+        float tRay, tAxis;
+        closestDistanceBetweenLines(rayOrigin, rayDir, gizmoPos, axes[hoveredAxis-1], tRay, tAxis);
+        g_gizmoDragOffset = tAxis;
+    }
+    else if (!mouseDown && g_gizmoActiveAxis > 0) {
+        // Released
+        g_gizmoActiveAxis = 0;
+    }
+    
+    if (mouseDown && g_gizmoActiveAxis > 0) {
+        // Dragging
+        int axisIdx = g_gizmoActiveAxis - 1;
+        float tRay, tAxis;
+        // Project ray onto the line passing through INITIAL pos
+        // Note: We use InitialPos as origin for the line to keep math stable
+        closestDistanceBetweenLines(rayOrigin, rayDir, g_gizmoInitialPos, axes[axisIdx], tRay, tAxis);
+        
+        // Calculate movement delta
+        // tAxis is the distance along the line from InitialPos
+        // We want the new position to be such that the point under cursor (tAxis) matches the initial grab point (dragOffset)
+        // Wait.
+        // tAxis is "where on the line is closest to ray now".
+        // g_gizmoDragOffset was "where on the line was closest to ray at start".
+        // The shift is (tAxis - g_gizmoDragOffset).
+        float delta = tAxis - g_gizmoDragOffset;
+        
+        result.x = g_gizmoInitialPos.x + axes[axisIdx].x * delta;
+        result.y = g_gizmoInitialPos.y + axes[axisIdx].y * delta;
+        result.z = g_gizmoInitialPos.z + axes[axisIdx].z * delta;
+    }
+    
+    g_gizmoWasMouseDown = mouseDown;
+    return result;
+}
+
+extern "C" int heidic_gizmo_is_interacting() {
+    return (g_gizmoActiveAxis > 0);
+}
+
+// ============================================================================
+// DYNAMIC CUBE STORAGE SYSTEM
+// ============================================================================
+
+struct CreatedCube {
+    float x, y, z;
+    float sx, sy, sz;  // size
+    int active;  // 1 = exists, 0 = deleted
+};
+
+static std::vector<CreatedCube> g_createdCubes;
+
+extern "C" int heidic_create_cube(float x, float y, float z, float sx, float sy, float sz) {
+    CreatedCube cube;
+    cube.x = x;
+    cube.y = y;
+    cube.z = z;
+    cube.sx = sx;
+    cube.sy = sy;
+    cube.sz = sz;
+    cube.active = 1;
+    g_createdCubes.push_back(cube);
+    return (int)(g_createdCubes.size() - 1);  // Return index
+}
+
+extern "C" int heidic_get_cube_count() {
+    int count = 0;
+    for (const auto& cube : g_createdCubes) {
+        if (cube.active == 1) count++;
+    }
+    return count;
+}
+
+extern "C" int heidic_get_cube_total_count() {
+    return (int)g_createdCubes.size();
+}
+
+extern "C" float heidic_get_cube_x(int index) {
+    if (index < 0 || index >= (int)g_createdCubes.size()) return 0.0f;
+    return g_createdCubes[index].x;
+}
+
+extern "C" float heidic_get_cube_y(int index) {
+    if (index < 0 || index >= (int)g_createdCubes.size()) return 0.0f;
+    return g_createdCubes[index].y;
+}
+
+extern "C" float heidic_get_cube_z(int index) {
+    if (index < 0 || index >= (int)g_createdCubes.size()) return 0.0f;
+    return g_createdCubes[index].z;
+}
+
+extern "C" float heidic_get_cube_sx(int index) {
+    if (index < 0 || index >= (int)g_createdCubes.size()) return 200.0f;
+    return g_createdCubes[index].sx;
+}
+
+extern "C" float heidic_get_cube_sy(int index) {
+    if (index < 0 || index >= (int)g_createdCubes.size()) return 200.0f;
+    return g_createdCubes[index].sy;
+}
+
+extern "C" float heidic_get_cube_sz(int index) {
+    if (index < 0 || index >= (int)g_createdCubes.size()) return 200.0f;
+    return g_createdCubes[index].sz;
+}
+
+extern "C" int heidic_get_cube_active(int index) {
+    if (index < 0 || index >= (int)g_createdCubes.size()) return 0;
+    return g_createdCubes[index].active;
+}
+
+extern "C" void heidic_set_cube_pos(int index, float x, float y, float z) {
+    if (index < 0 || index >= (int)g_createdCubes.size()) return;
+    g_createdCubes[index].x = x;
+    g_createdCubes[index].y = y;
+    g_createdCubes[index].z = z;
+}
+
+// Overload that accepts float index (for HEIDIC compatibility)
+extern "C" void heidic_set_cube_pos_f(float index_f, float x, float y, float z) {
+    int index = (int)index_f;
+    if (index < 0 || index >= (int)g_createdCubes.size()) return;
+    g_createdCubes[index].x = x;
+    g_createdCubes[index].y = y;
+    g_createdCubes[index].z = z;
+}
+
+extern "C" void heidic_delete_cube(int index) {
+    if (index < 0 || index >= (int)g_createdCubes.size()) return;
+    g_createdCubes[index].active = 0;
+}
+
+extern "C" int heidic_find_next_active_cube_index(int start_index) {
+    // Find the next active cube starting from start_index
+    for (int i = start_index; i < (int)g_createdCubes.size(); i++) {
+        if (g_createdCubes[i].active == 1) {
+            return i;
+        }
+    }
+    return -1;  // No more active cubes
+}
+
+// Helper to convert i32 to f32 (for HEIDIC type system)
+extern "C" float heidic_int_to_float(int value) {
+    return (float)value;
 }

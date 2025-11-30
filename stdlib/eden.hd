@@ -76,4 +76,24 @@ extern fn heidic_draw_ground_plane(size: f32, r: f32, g: f32, b: f32): void;
 extern fn heidic_raycast_ground_hit(x: f32, y: f32, z: f32, maxDistance: f32): i32;
 extern fn heidic_raycast_ground_hit_point(x: f32, y: f32, z: f32, maxDistance: f32): Vec3;
 extern fn heidic_debug_print_ray(window: GLFWwindow): void;
+extern fn heidic_draw_ray(window: GLFWwindow, length: f32, r: f32, g: f32, b: f32): void;
+extern fn heidic_gizmo_translate(window: GLFWwindow, x: f32, y: f32, z: f32): Vec3;
+extern fn heidic_gizmo_is_interacting(): i32;
+
+// Dynamic Cube Storage System
+extern fn heidic_create_cube(x: f32, y: f32, z: f32, sx: f32, sy: f32, sz: f32): i32;
+extern fn heidic_get_cube_count(): i32;
+extern fn heidic_get_cube_total_count(): i32;
+extern fn heidic_get_cube_x(index: i32): f32;
+extern fn heidic_get_cube_y(index: i32): f32;
+extern fn heidic_get_cube_z(index: i32): f32;
+extern fn heidic_get_cube_sx(index: i32): f32;
+extern fn heidic_get_cube_sy(index: i32): f32;
+extern fn heidic_get_cube_sz(index: i32): f32;
+extern fn heidic_get_cube_active(index: i32): i32;
+extern fn heidic_set_cube_pos(index: i32, x: f32, y: f32, z: f32): void;
+extern fn heidic_set_cube_pos_f(index: f32, x: f32, y: f32, z: f32): void;
+extern fn heidic_delete_cube(index: i32): void;
+extern fn heidic_find_next_active_cube_index(start_index: i32): i32;
+extern fn heidic_int_to_float(value: i32): f32;
 

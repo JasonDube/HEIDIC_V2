@@ -82,4 +82,27 @@ extern "C" {
     
     // Debug: Print raycast info to console
     void heidic_debug_print_ray(GLFWwindow* window);
+    // Draw mouse ray for visual debugging
+    void heidic_draw_ray(GLFWwindow* window, float length, float r, float g, float b);
+
+    // Gizmos
+    Vec3 heidic_gizmo_translate(GLFWwindow* window, float x, float y, float z);
+    int heidic_gizmo_is_interacting();
+    
+    // Dynamic Cube Storage System
+    int heidic_create_cube(float x, float y, float z, float sx, float sy, float sz);
+    int heidic_get_cube_count();  // Returns count of active cubes
+    int heidic_get_cube_total_count();  // Returns total count (including deleted)
+    float heidic_get_cube_x(int index);
+    float heidic_get_cube_y(int index);
+    float heidic_get_cube_z(int index);
+    float heidic_get_cube_sx(int index);
+    float heidic_get_cube_sy(int index);
+    float heidic_get_cube_sz(int index);
+    int heidic_get_cube_active(int index);
+    void heidic_set_cube_pos(int index, float x, float y, float z);
+    void heidic_set_cube_pos_f(float index, float x, float y, float z);  // Float index version
+    void heidic_delete_cube(int index);
+    int heidic_find_next_active_cube_index(int start_index);  // Returns -1 if no more
+    float heidic_int_to_float(int value);  // Convert i32 to f32
 }

@@ -1,0 +1,5 @@
+fn main(): void {
+    print("Hello from HEIDIC!\n");
+    print("Simple test program\n");
+}
+

@@ -229,6 +229,63 @@ extern "C" {
 extern "C" {
     Vec3 heidic_raycast_ground_hit_point(float x, float y, float z, float maxDistance);
 }
+extern "C" {
+    void heidic_debug_print_ray(GLFWwindow* window);
+}
+extern "C" {
+    void heidic_draw_ray(GLFWwindow* window, float length, float r, float g, float b);
+}
+extern "C" {
+    Vec3 heidic_gizmo_translate(GLFWwindow* window, float x, float y, float z);
+}
+extern "C" {
+    int32_t heidic_gizmo_is_interacting();
+}
+extern "C" {
+    int32_t heidic_create_cube(float x, float y, float z, float sx, float sy, float sz);
+}
+extern "C" {
+    int32_t heidic_get_cube_count();
+}
+extern "C" {
+    int32_t heidic_get_cube_total_count();
+}
+extern "C" {
+    float heidic_get_cube_x(int32_t index);
+}
+extern "C" {
+    float heidic_get_cube_y(int32_t index);
+}
+extern "C" {
+    float heidic_get_cube_z(int32_t index);
+}
+extern "C" {
+    float heidic_get_cube_sx(int32_t index);
+}
+extern "C" {
+    float heidic_get_cube_sy(int32_t index);
+}
+extern "C" {
+    float heidic_get_cube_sz(int32_t index);
+}
+extern "C" {
+    int32_t heidic_get_cube_active(int32_t index);
+}
+extern "C" {
+    void heidic_set_cube_pos(int32_t index, float x, float y, float z);
+}
+extern "C" {
+    void heidic_set_cube_pos_f(float index, float x, float y, float z);
+}
+extern "C" {
+    void heidic_delete_cube(int32_t index);
+}
+extern "C" {
+    int32_t heidic_find_next_active_cube_index(int32_t start_index);
+}
+extern "C" {
+    float heidic_int_to_float(int32_t value);
+}
 
 int heidic_main();
 
@@ -273,11 +330,17 @@ int heidic_main() {
         float selected_cube_sy = 0;
         float selected_cube_sz = 0;
         int32_t has_selection = 0;
+        float selected_cube_index = -1;
         int32_t is_grounded = 0;
         int32_t mouse_left_was_pressed = 0;
         float topdown_cam_height = 10000;
         Vec3 topdown_cam_pos = heidic_vec3(0, topdown_cam_height, 0);
         Vec3 topdown_cam_rot = heidic_vec3(-90, 0, 0);
+        float ref1_x = -2000;
+        float ref1_y = 500;
+        float ref1_z = -2000;
+        int32_t space_was_pressed = 0;
+        float created_cube_size = 200;
         std::cout << "Starting loop...\n" << std::endl;
         while ((heidic_window_should_close(window) == 0)) {
             heidic_poll_events();
@@ -322,6 +385,34 @@ int heidic_main() {
                 }
             } else {
                 g_was_pressed = 0;
+            }
+            int32_t space_is_pressed = heidic_is_key_pressed(window, 32);
+            if ((space_is_pressed == 0)) {
+                space_is_pressed = heidic_is_key_pressed(window, 57);
+            }
+            if ((space_is_pressed == 1)) {
+                if ((space_was_pressed == 0)) {
+                    std::cout << "SPACEBAR PRESSED!\n" << std::endl;
+                    Vec3 create_ray_origin = heidic_get_mouse_ray_origin(window);
+                    Vec3 create_ray_dir = heidic_get_mouse_ray_dir(window);
+                    Vec3 create_pos = heidic_vec3(0, 500, 0);
+                    int32_t ground_hit = heidic_raycast_ground_hit(create_ray_origin.x, create_ray_origin.y, create_ray_origin.z, 100000);
+                    if ((ground_hit == 1)) {
+                        create_pos = heidic_raycast_ground_hit_point(create_ray_origin.x, create_ray_origin.y, create_ray_origin.z, 100000);
+                        create_pos.y = (create_pos.y + 100);
+                        std::cout << "Ground hit! Creating cube at ground position\n" << std::endl;
+                    } else {
+                        create_pos = heidic_vec3_add(create_ray_origin, heidic_vec3((create_ray_dir.x * 5000), (create_ray_dir.y * 5000), (create_ray_dir.z * 5000)));
+                        std::cout << "No ground hit, placing cube along ray\n" << std::endl;
+                    }
+                    int32_t cube_index = heidic_create_cube(create_pos.x, create_pos.y, create_pos.z, created_cube_size, created_cube_size, created_cube_size);
+                    std::cout << "Created cube at index " << std::endl;
+                    std::cout << "Position: (" << std::endl;
+                    std::cout << ")\n" << std::endl;
+                    space_was_pressed = 1;
+                }
+            } else {
+                space_was_pressed = 0;
             }
             int32_t enter_is_pressed = heidic_is_key_pressed(window, 257);
             int32_t left_shift_is_pressed = heidic_is_key_pressed(window, 340);
@@ -416,7 +507,7 @@ int heidic_main() {
             float cube_spacing = 2000;
             float cube_height = 1000;
             float cube_size = 200;
-            heidic_draw_cube(-(cube_spacing), (cube_height / 2), -(cube_spacing), 0, 0, 0, cube_size, cube_height, cube_size);
+            heidic_draw_cube(ref1_x, ref1_y, ref1_z, 0, 0, 0, cube_size, cube_height, cube_size);
             heidic_draw_cube(0, (cube_height / 2), -(cube_spacing), 0, 0, 0, cube_size, cube_height, cube_size);
             heidic_draw_cube(cube_spacing, (cube_height / 2), -(cube_spacing), 0, 0, 0, cube_size, cube_height, cube_size);
             heidic_draw_cube(-(cube_spacing), (cube_height / 2), 0, 0, 0, 0, cube_size, cube_height, cube_size);
@@ -426,195 +517,293 @@ int heidic_main() {
             heidic_draw_cube(0, (cube_height / 2), cube_spacing, 0, 0, 0, cube_size, cube_height, cube_size);
             heidic_draw_cube(cube_spacing, (cube_height / 2), cube_spacing, 0, 0, 0, cube_size, cube_height, cube_size);
             heidic_draw_cube((cube_spacing * 2), (cube_height / 2), 0, 0, 0, 0, cube_size, cube_height, cube_size);
+            int32_t cube_draw_index = 0;
+            int32_t total_cubes = heidic_get_cube_total_count();
+            while ((cube_draw_index < total_cubes)) {
+                if ((heidic_get_cube_active(cube_draw_index) == 1)) {
+                    float cube_x = heidic_get_cube_x(cube_draw_index);
+                    float cube_y = heidic_get_cube_y(cube_draw_index);
+                    float cube_z = heidic_get_cube_z(cube_draw_index);
+                    float cube_sx = heidic_get_cube_sx(cube_draw_index);
+                    float cube_sy = heidic_get_cube_sy(cube_draw_index);
+                    float cube_sz = heidic_get_cube_sz(cube_draw_index);
+                    heidic_draw_cube(cube_x, cube_y, cube_z, 0, 0, 0, cube_sx, cube_sy, cube_sz);
+                }
+                cube_draw_index = (cube_draw_index + 1);
+            }
             float mouse_x = heidic_get_mouse_x(window);
             float mouse_y = heidic_get_mouse_y(window);
             Vec3 ray_origin = heidic_get_mouse_ray_origin(window);
             Vec3 ray_dir = heidic_get_mouse_ray_dir(window);
-            Vec3 line_end = heidic_vec3(0, 0, 0);
-            if ((has_selection == 1)) {
-                line_end = heidic_raycast_cube_hit_point(window, selected_cube_x, selected_cube_y, selected_cube_z, selected_cube_sx, selected_cube_sy, selected_cube_sz);
-            } else {
-                line_end = heidic_vec3_add(ray_origin, heidic_vec3((ray_dir.x * 50000), (ray_dir.y * 50000), (ray_dir.z * 50000)));
-            }
-            heidic_draw_line(player_pos.x, player_pos.y, player_pos.z, line_end.x, line_end.y, line_end.z, 1, 1, 0);
             int32_t mouse_left_pressed = heidic_is_mouse_button_pressed(window, 0);
             if ((mouse_left_pressed == 1)) {
-                if ((mouse_left_was_pressed == 0)) {
-                    has_selection = 0;
-                    float closest_dist = 999999;
-                    int32_t player_hit = heidic_raycast_cube_hit(window, cube_x, cube_y, cube_z, cube_sx, cube_sy, cube_sz);
-                    if ((player_hit == 1)) {
-                        Vec3 hit_point = heidic_raycast_cube_hit_point(window, cube_x, cube_y, cube_z, cube_sx, cube_sy, cube_sz);
-                        float dist = ((((hit_point.x - ray_origin.x) * (hit_point.x - ray_origin.x)) + ((hit_point.y - ray_origin.y) * (hit_point.y - ray_origin.y))) + ((hit_point.z - ray_origin.z) * (hit_point.z - ray_origin.z)));
-                        if ((dist < closest_dist)) {
-                            closest_dist = dist;
-                            has_selection = 1;
-                            selected_cube_x = cube_x;
-                            selected_cube_y = cube_y;
-                            selected_cube_z = cube_z;
-                            selected_cube_sx = cube_sx;
-                            selected_cube_sy = cube_sy;
-                            selected_cube_sz = cube_sz;
+                int32_t interacting = 0;
+                if ((mouse_left_was_pressed == 1)) {
+                    interacting = heidic_gizmo_is_interacting();
+                }
+                if ((interacting == 0)) {
+                    if ((mouse_left_was_pressed == 0)) {
+                        has_selection = 0;
+                        selected_cube_index = -1;
+                        float closest_dist = 100000000000;
+                        float ref_cube_y = (cube_height / 2);
+                        int32_t test_hit = heidic_raycast_cube_hit(window, ref1_x, ref1_y, ref1_z, cube_size, cube_height, cube_size);
+                        if ((test_hit == 1)) {
+                            Vec3 hit_point = heidic_raycast_cube_hit_point(window, ref1_x, ref1_y, ref1_z, cube_size, cube_height, cube_size);
+                            float dist = ((((hit_point.x - ray_origin.x) * (hit_point.x - ray_origin.x)) + ((hit_point.y - ray_origin.y) * (hit_point.y - ray_origin.y))) + ((hit_point.z - ray_origin.z) * (hit_point.z - ray_origin.z)));
+                            if ((dist < closest_dist)) {
+                                closest_dist = dist;
+                                has_selection = 1;
+                                selected_cube_index = 1;
+                                selected_cube_x = ref1_x;
+                                selected_cube_y = ref1_y;
+                                selected_cube_z = ref1_z;
+                                selected_cube_sx = cube_size;
+                                selected_cube_sy = cube_height;
+                                selected_cube_sz = cube_size;
+                            }
                         }
-                    }
-                    float ref_cube_y = (cube_height / 2);
-                    int32_t test_hit = heidic_raycast_cube_hit(window, -(cube_spacing), ref_cube_y, -(cube_spacing), cube_size, cube_height, cube_size);
-                    if ((test_hit == 1)) {
-                        Vec3 hit_point = heidic_raycast_cube_hit_point(window, -(cube_spacing), ref_cube_y, -(cube_spacing), cube_size, cube_height, cube_size);
-                        float dist = ((((hit_point.x - ray_origin.x) * (hit_point.x - ray_origin.x)) + ((hit_point.y - ray_origin.y) * (hit_point.y - ray_origin.y))) + ((hit_point.z - ray_origin.z) * (hit_point.z - ray_origin.z)));
-                        if ((dist < closest_dist)) {
-                            closest_dist = dist;
-                            has_selection = 1;
-                            selected_cube_x = -(cube_spacing);
-                            selected_cube_y = ref_cube_y;
-                            selected_cube_z = -(cube_spacing);
-                            selected_cube_sx = cube_size;
-                            selected_cube_sy = cube_height;
-                            selected_cube_sz = cube_size;
+                        int32_t player_hit = heidic_raycast_cube_hit(window, cube_x, cube_y, cube_z, cube_sx, cube_sy, cube_sz);
+                        if ((player_hit == 1)) {
+                            Vec3 hit_point = heidic_raycast_cube_hit_point(window, cube_x, cube_y, cube_z, cube_sx, cube_sy, cube_sz);
+                            float dist = ((((hit_point.x - ray_origin.x) * (hit_point.x - ray_origin.x)) + ((hit_point.y - ray_origin.y) * (hit_point.y - ray_origin.y))) + ((hit_point.z - ray_origin.z) * (hit_point.z - ray_origin.z)));
+                            if ((dist < closest_dist)) {
+                                closest_dist = dist;
+                                has_selection = 1;
+                                selected_cube_index = 0;
+                                selected_cube_x = cube_x;
+                                selected_cube_y = cube_y;
+                                selected_cube_z = cube_z;
+                                selected_cube_sx = cube_sx;
+                                selected_cube_sy = cube_sy;
+                                selected_cube_sz = cube_sz;
+                            }
                         }
-                    }
-                    test_hit = heidic_raycast_cube_hit(window, 0, ref_cube_y, -(cube_spacing), cube_size, cube_height, cube_size);
-                    if ((test_hit == 1)) {
-                        Vec3 hit_point = heidic_raycast_cube_hit_point(window, 0, ref_cube_y, -(cube_spacing), cube_size, cube_height, cube_size);
-                        float dist = ((((hit_point.x - ray_origin.x) * (hit_point.x - ray_origin.x)) + ((hit_point.y - ray_origin.y) * (hit_point.y - ray_origin.y))) + ((hit_point.z - ray_origin.z) * (hit_point.z - ray_origin.z)));
-                        if ((dist < closest_dist)) {
-                            closest_dist = dist;
-                            has_selection = 1;
-                            selected_cube_x = 0;
-                            selected_cube_y = ref_cube_y;
-                            selected_cube_z = -(cube_spacing);
-                            selected_cube_sx = cube_size;
-                            selected_cube_sy = cube_height;
-                            selected_cube_sz = cube_size;
+                        int32_t cube_test_index = 0;
+                        int32_t total_cubes_test = heidic_get_cube_total_count();
+                        while ((cube_test_index < total_cubes_test)) {
+                            if ((heidic_get_cube_active(cube_test_index) == 1)) {
+                                float test_cube_x = heidic_get_cube_x(cube_test_index);
+                                float test_cube_y = heidic_get_cube_y(cube_test_index);
+                                float test_cube_z = heidic_get_cube_z(cube_test_index);
+                                float test_cube_sx = heidic_get_cube_sx(cube_test_index);
+                                float test_cube_sy = heidic_get_cube_sy(cube_test_index);
+                                float test_cube_sz = heidic_get_cube_sz(cube_test_index);
+                                int32_t created_hit = heidic_raycast_cube_hit(window, test_cube_x, test_cube_y, test_cube_z, test_cube_sx, test_cube_sy, test_cube_sz);
+                                if ((created_hit == 1)) {
+                                    Vec3 hit_point = heidic_raycast_cube_hit_point(window, test_cube_x, test_cube_y, test_cube_z, test_cube_sx, test_cube_sy, test_cube_sz);
+                                    float dist = ((((hit_point.x - ray_origin.x) * (hit_point.x - ray_origin.x)) + ((hit_point.y - ray_origin.y) * (hit_point.y - ray_origin.y))) + ((hit_point.z - ray_origin.z) * (hit_point.z - ray_origin.z)));
+                                    if ((dist < closest_dist)) {
+                                        closest_dist = dist;
+                                        has_selection = 1;
+                                        float cube_index_f = heidic_int_to_float(cube_test_index);
+                                        selected_cube_index = (cube_index_f + 2);
+                                        selected_cube_x = test_cube_x;
+                                        selected_cube_y = test_cube_y;
+                                        selected_cube_z = test_cube_z;
+                                        selected_cube_sx = test_cube_sx;
+                                        selected_cube_sy = test_cube_sy;
+                                        selected_cube_sz = test_cube_sz;
+                                    }
+                                }
+                            }
+                            cube_test_index = (cube_test_index + 1);
                         }
-                    }
-                    test_hit = heidic_raycast_cube_hit(window, cube_spacing, ref_cube_y, -(cube_spacing), cube_size, cube_height, cube_size);
-                    if ((test_hit == 1)) {
-                        Vec3 hit_point = heidic_raycast_cube_hit_point(window, cube_spacing, ref_cube_y, -(cube_spacing), cube_size, cube_height, cube_size);
-                        float dist = ((((hit_point.x - ray_origin.x) * (hit_point.x - ray_origin.x)) + ((hit_point.y - ray_origin.y) * (hit_point.y - ray_origin.y))) + ((hit_point.z - ray_origin.z) * (hit_point.z - ray_origin.z)));
-                        if ((dist < closest_dist)) {
-                            closest_dist = dist;
-                            has_selection = 1;
-                            selected_cube_x = cube_spacing;
-                            selected_cube_y = ref_cube_y;
-                            selected_cube_z = -(cube_spacing);
-                            selected_cube_sx = cube_size;
-                            selected_cube_sy = cube_height;
-                            selected_cube_sz = cube_size;
+                        test_hit = heidic_raycast_cube_hit(window, 0, ref_cube_y, -(cube_spacing), cube_size, cube_height, cube_size);
+                        if ((test_hit == 1)) {
+                            Vec3 hit_point = heidic_raycast_cube_hit_point(window, 0, ref_cube_y, -(cube_spacing), cube_size, cube_height, cube_size);
+                            float dist = ((((hit_point.x - ray_origin.x) * (hit_point.x - ray_origin.x)) + ((hit_point.y - ray_origin.y) * (hit_point.y - ray_origin.y))) + ((hit_point.z - ray_origin.z) * (hit_point.z - ray_origin.z)));
+                            if ((dist < closest_dist)) {
+                                closest_dist = dist;
+                                has_selection = 1;
+                                selected_cube_x = 0;
+                                selected_cube_y = ref_cube_y;
+                                selected_cube_z = -(cube_spacing);
+                                selected_cube_sx = cube_size;
+                                selected_cube_sy = cube_height;
+                                selected_cube_sz = cube_size;
+                            }
                         }
-                    }
-                    test_hit = heidic_raycast_cube_hit(window, -(cube_spacing), ref_cube_y, 0, cube_size, cube_height, cube_size);
-                    if ((test_hit == 1)) {
-                        Vec3 hit_point = heidic_raycast_cube_hit_point(window, -(cube_spacing), ref_cube_y, 0, cube_size, cube_height, cube_size);
-                        float dist = ((((hit_point.x - ray_origin.x) * (hit_point.x - ray_origin.x)) + ((hit_point.y - ray_origin.y) * (hit_point.y - ray_origin.y))) + ((hit_point.z - ray_origin.z) * (hit_point.z - ray_origin.z)));
-                        if ((dist < closest_dist)) {
-                            closest_dist = dist;
-                            has_selection = 1;
-                            selected_cube_x = -(cube_spacing);
-                            selected_cube_y = ref_cube_y;
-                            selected_cube_z = 0;
-                            selected_cube_sx = cube_size;
-                            selected_cube_sy = cube_height;
-                            selected_cube_sz = cube_size;
+                        test_hit = heidic_raycast_cube_hit(window, cube_spacing, ref_cube_y, -(cube_spacing), cube_size, cube_height, cube_size);
+                        if ((test_hit == 1)) {
+                            Vec3 hit_point = heidic_raycast_cube_hit_point(window, cube_spacing, ref_cube_y, -(cube_spacing), cube_size, cube_height, cube_size);
+                            float dist = ((((hit_point.x - ray_origin.x) * (hit_point.x - ray_origin.x)) + ((hit_point.y - ray_origin.y) * (hit_point.y - ray_origin.y))) + ((hit_point.z - ray_origin.z) * (hit_point.z - ray_origin.z)));
+                            if ((dist < closest_dist)) {
+                                closest_dist = dist;
+                                has_selection = 1;
+                                selected_cube_x = cube_spacing;
+                                selected_cube_y = ref_cube_y;
+                                selected_cube_z = -(cube_spacing);
+                                selected_cube_sx = cube_size;
+                                selected_cube_sy = cube_height;
+                                selected_cube_sz = cube_size;
+                            }
                         }
-                    }
-                    test_hit = heidic_raycast_cube_hit(window, 0, ref_cube_y, 0, cube_size, cube_height, cube_size);
-                    if ((test_hit == 1)) {
-                        Vec3 hit_point = heidic_raycast_cube_hit_point(window, 0, ref_cube_y, 0, cube_size, cube_height, cube_size);
-                        float dist = ((((hit_point.x - ray_origin.x) * (hit_point.x - ray_origin.x)) + ((hit_point.y - ray_origin.y) * (hit_point.y - ray_origin.y))) + ((hit_point.z - ray_origin.z) * (hit_point.z - ray_origin.z)));
-                        if ((dist < closest_dist)) {
-                            closest_dist = dist;
-                            has_selection = 1;
-                            selected_cube_x = 0;
-                            selected_cube_y = ref_cube_y;
-                            selected_cube_z = 0;
-                            selected_cube_sx = cube_size;
-                            selected_cube_sy = cube_height;
-                            selected_cube_sz = cube_size;
+                        test_hit = heidic_raycast_cube_hit(window, -(cube_spacing), ref_cube_y, 0, cube_size, cube_height, cube_size);
+                        if ((test_hit == 1)) {
+                            Vec3 hit_point = heidic_raycast_cube_hit_point(window, -(cube_spacing), ref_cube_y, 0, cube_size, cube_height, cube_size);
+                            float dist = ((((hit_point.x - ray_origin.x) * (hit_point.x - ray_origin.x)) + ((hit_point.y - ray_origin.y) * (hit_point.y - ray_origin.y))) + ((hit_point.z - ray_origin.z) * (hit_point.z - ray_origin.z)));
+                            if ((dist < closest_dist)) {
+                                closest_dist = dist;
+                                has_selection = 1;
+                                selected_cube_x = -(cube_spacing);
+                                selected_cube_y = ref_cube_y;
+                                selected_cube_z = 0;
+                                selected_cube_sx = cube_size;
+                                selected_cube_sy = cube_height;
+                                selected_cube_sz = cube_size;
+                            }
                         }
-                    }
-                    test_hit = heidic_raycast_cube_hit(window, cube_spacing, ref_cube_y, 0, cube_size, cube_height, cube_size);
-                    if ((test_hit == 1)) {
-                        Vec3 hit_point = heidic_raycast_cube_hit_point(window, cube_spacing, ref_cube_y, 0, cube_size, cube_height, cube_size);
-                        float dist = ((((hit_point.x - ray_origin.x) * (hit_point.x - ray_origin.x)) + ((hit_point.y - ray_origin.y) * (hit_point.y - ray_origin.y))) + ((hit_point.z - ray_origin.z) * (hit_point.z - ray_origin.z)));
-                        if ((dist < closest_dist)) {
-                            closest_dist = dist;
-                            has_selection = 1;
-                            selected_cube_x = cube_spacing;
-                            selected_cube_y = ref_cube_y;
-                            selected_cube_z = 0;
-                            selected_cube_sx = cube_size;
-                            selected_cube_sy = cube_height;
-                            selected_cube_sz = cube_size;
+                        test_hit = heidic_raycast_cube_hit(window, 0, ref_cube_y, 0, cube_size, cube_height, cube_size);
+                        if ((test_hit == 1)) {
+                            Vec3 hit_point = heidic_raycast_cube_hit_point(window, 0, ref_cube_y, 0, cube_size, cube_height, cube_size);
+                            float dist = ((((hit_point.x - ray_origin.x) * (hit_point.x - ray_origin.x)) + ((hit_point.y - ray_origin.y) * (hit_point.y - ray_origin.y))) + ((hit_point.z - ray_origin.z) * (hit_point.z - ray_origin.z)));
+                            if ((dist < closest_dist)) {
+                                closest_dist = dist;
+                                has_selection = 1;
+                                selected_cube_x = 0;
+                                selected_cube_y = ref_cube_y;
+                                selected_cube_z = 0;
+                                selected_cube_sx = cube_size;
+                                selected_cube_sy = cube_height;
+                                selected_cube_sz = cube_size;
+                            }
                         }
-                    }
-                    test_hit = heidic_raycast_cube_hit(window, -(cube_spacing), ref_cube_y, cube_spacing, cube_size, cube_height, cube_size);
-                    if ((test_hit == 1)) {
-                        Vec3 hit_point = heidic_raycast_cube_hit_point(window, -(cube_spacing), ref_cube_y, cube_spacing, cube_size, cube_height, cube_size);
-                        float dist = ((((hit_point.x - ray_origin.x) * (hit_point.x - ray_origin.x)) + ((hit_point.y - ray_origin.y) * (hit_point.y - ray_origin.y))) + ((hit_point.z - ray_origin.z) * (hit_point.z - ray_origin.z)));
-                        if ((dist < closest_dist)) {
-                            closest_dist = dist;
-                            has_selection = 1;
-                            selected_cube_x = -(cube_spacing);
-                            selected_cube_y = ref_cube_y;
-                            selected_cube_z = cube_spacing;
-                            selected_cube_sx = cube_size;
-                            selected_cube_sy = cube_height;
-                            selected_cube_sz = cube_size;
+                        test_hit = heidic_raycast_cube_hit(window, cube_spacing, ref_cube_y, 0, cube_size, cube_height, cube_size);
+                        if ((test_hit == 1)) {
+                            Vec3 hit_point = heidic_raycast_cube_hit_point(window, cube_spacing, ref_cube_y, 0, cube_size, cube_height, cube_size);
+                            float dist = ((((hit_point.x - ray_origin.x) * (hit_point.x - ray_origin.x)) + ((hit_point.y - ray_origin.y) * (hit_point.y - ray_origin.y))) + ((hit_point.z - ray_origin.z) * (hit_point.z - ray_origin.z)));
+                            if ((dist < closest_dist)) {
+                                closest_dist = dist;
+                                has_selection = 1;
+                                selected_cube_x = cube_spacing;
+                                selected_cube_y = ref_cube_y;
+                                selected_cube_z = 0;
+                                selected_cube_sx = cube_size;
+                                selected_cube_sy = cube_height;
+                                selected_cube_sz = cube_size;
+                            }
                         }
-                    }
-                    test_hit = heidic_raycast_cube_hit(window, 0, ref_cube_y, cube_spacing, cube_size, cube_height, cube_size);
-                    if ((test_hit == 1)) {
-                        Vec3 hit_point = heidic_raycast_cube_hit_point(window, 0, ref_cube_y, cube_spacing, cube_size, cube_height, cube_size);
-                        float dist = ((((hit_point.x - ray_origin.x) * (hit_point.x - ray_origin.x)) + ((hit_point.y - ray_origin.y) * (hit_point.y - ray_origin.y))) + ((hit_point.z - ray_origin.z) * (hit_point.z - ray_origin.z)));
-                        if ((dist < closest_dist)) {
-                            closest_dist = dist;
-                            has_selection = 1;
-                            selected_cube_x = 0;
-                            selected_cube_y = ref_cube_y;
-                            selected_cube_z = cube_spacing;
-                            selected_cube_sx = cube_size;
-                            selected_cube_sy = cube_height;
-                            selected_cube_sz = cube_size;
+                        test_hit = heidic_raycast_cube_hit(window, -(cube_spacing), ref_cube_y, cube_spacing, cube_size, cube_height, cube_size);
+                        if ((test_hit == 1)) {
+                            Vec3 hit_point = heidic_raycast_cube_hit_point(window, -(cube_spacing), ref_cube_y, cube_spacing, cube_size, cube_height, cube_size);
+                            float dist = ((((hit_point.x - ray_origin.x) * (hit_point.x - ray_origin.x)) + ((hit_point.y - ray_origin.y) * (hit_point.y - ray_origin.y))) + ((hit_point.z - ray_origin.z) * (hit_point.z - ray_origin.z)));
+                            if ((dist < closest_dist)) {
+                                closest_dist = dist;
+                                has_selection = 1;
+                                selected_cube_x = -(cube_spacing);
+                                selected_cube_y = ref_cube_y;
+                                selected_cube_z = cube_spacing;
+                                selected_cube_sx = cube_size;
+                                selected_cube_sy = cube_height;
+                                selected_cube_sz = cube_size;
+                            }
                         }
-                    }
-                    test_hit = heidic_raycast_cube_hit(window, cube_spacing, ref_cube_y, cube_spacing, cube_size, cube_height, cube_size);
-                    if ((test_hit == 1)) {
-                        Vec3 hit_point = heidic_raycast_cube_hit_point(window, cube_spacing, ref_cube_y, cube_spacing, cube_size, cube_height, cube_size);
-                        float dist = ((((hit_point.x - ray_origin.x) * (hit_point.x - ray_origin.x)) + ((hit_point.y - ray_origin.y) * (hit_point.y - ray_origin.y))) + ((hit_point.z - ray_origin.z) * (hit_point.z - ray_origin.z)));
-                        if ((dist < closest_dist)) {
-                            closest_dist = dist;
-                            has_selection = 1;
-                            selected_cube_x = cube_spacing;
-                            selected_cube_y = ref_cube_y;
-                            selected_cube_z = cube_spacing;
-                            selected_cube_sx = cube_size;
-                            selected_cube_sy = cube_height;
-                            selected_cube_sz = cube_size;
+                        test_hit = heidic_raycast_cube_hit(window, 0, ref_cube_y, cube_spacing, cube_size, cube_height, cube_size);
+                        if ((test_hit == 1)) {
+                            Vec3 hit_point = heidic_raycast_cube_hit_point(window, 0, ref_cube_y, cube_spacing, cube_size, cube_height, cube_size);
+                            float dist = ((((hit_point.x - ray_origin.x) * (hit_point.x - ray_origin.x)) + ((hit_point.y - ray_origin.y) * (hit_point.y - ray_origin.y))) + ((hit_point.z - ray_origin.z) * (hit_point.z - ray_origin.z)));
+                            if ((dist < closest_dist)) {
+                                closest_dist = dist;
+                                has_selection = 1;
+                                selected_cube_x = 0;
+                                selected_cube_y = ref_cube_y;
+                                selected_cube_z = cube_spacing;
+                                selected_cube_sx = cube_size;
+                                selected_cube_sy = cube_height;
+                                selected_cube_sz = cube_size;
+                            }
                         }
-                    }
-                    int32_t extra_hit = heidic_raycast_cube_hit(window, (cube_spacing * 2), ref_cube_y, 0, cube_size, cube_height, cube_size);
-                    if ((extra_hit == 1)) {
-                        Vec3 hit_point = heidic_raycast_cube_hit_point(window, (cube_spacing * 2), ref_cube_y, 0, cube_size, cube_height, cube_size);
-                        float dist = ((((hit_point.x - ray_origin.x) * (hit_point.x - ray_origin.x)) + ((hit_point.y - ray_origin.y) * (hit_point.y - ray_origin.y))) + ((hit_point.z - ray_origin.z) * (hit_point.z - ray_origin.z)));
-                        if ((dist < closest_dist)) {
-                            closest_dist = dist;
-                            has_selection = 1;
-                            selected_cube_x = (cube_spacing * 2);
-                            selected_cube_y = ref_cube_y;
-                            selected_cube_z = 0;
-                            selected_cube_sx = cube_size;
-                            selected_cube_sy = cube_height;
-                            selected_cube_sz = cube_size;
+                        test_hit = heidic_raycast_cube_hit(window, cube_spacing, ref_cube_y, cube_spacing, cube_size, cube_height, cube_size);
+                        if ((test_hit == 1)) {
+                            Vec3 hit_point = heidic_raycast_cube_hit_point(window, cube_spacing, ref_cube_y, cube_spacing, cube_size, cube_height, cube_size);
+                            float dist = ((((hit_point.x - ray_origin.x) * (hit_point.x - ray_origin.x)) + ((hit_point.y - ray_origin.y) * (hit_point.y - ray_origin.y))) + ((hit_point.z - ray_origin.z) * (hit_point.z - ray_origin.z)));
+                            if ((dist < closest_dist)) {
+                                closest_dist = dist;
+                                has_selection = 1;
+                                selected_cube_x = cube_spacing;
+                                selected_cube_y = ref_cube_y;
+                                selected_cube_z = cube_spacing;
+                                selected_cube_sx = cube_size;
+                                selected_cube_sy = cube_height;
+                                selected_cube_sz = cube_size;
+                            }
                         }
+                        int32_t extra_hit = heidic_raycast_cube_hit(window, (cube_spacing * 2), ref_cube_y, 0, cube_size, cube_height, cube_size);
+                        if ((extra_hit == 1)) {
+                            Vec3 hit_point = heidic_raycast_cube_hit_point(window, (cube_spacing * 2), ref_cube_y, 0, cube_size, cube_height, cube_size);
+                            float dist = ((((hit_point.x - ray_origin.x) * (hit_point.x - ray_origin.x)) + ((hit_point.y - ray_origin.y) * (hit_point.y - ray_origin.y))) + ((hit_point.z - ray_origin.z) * (hit_point.z - ray_origin.z)));
+                            if ((dist < closest_dist)) {
+                                closest_dist = dist;
+                                has_selection = 1;
+                                selected_cube_x = (cube_spacing * 2);
+                                selected_cube_y = ref_cube_y;
+                                selected_cube_z = 0;
+                                selected_cube_sx = cube_size;
+                                selected_cube_sy = cube_height;
+                                selected_cube_sz = cube_size;
+                            }
+                        }
+                        mouse_left_was_pressed = 1;
                     }
-                    mouse_left_was_pressed = 1;
                 }
             } else {
                 mouse_left_was_pressed = 0;
             }
             if ((has_selection == 1)) {
-                heidic_draw_cube_wireframe(selected_cube_x, selected_cube_y, selected_cube_z, 0, 0, 0, selected_cube_sx, selected_cube_sy, selected_cube_sz, 0, 0, 0);
+                if ((selected_cube_index == -1)) {
+                    float dx = (selected_cube_x - ref1_x);
+                    float dy = (selected_cube_y - ref1_y);
+                    float dz = (selected_cube_z - ref1_z);
+                    float dist_sq = (((dx * dx) + (dy * dy)) + (dz * dz));
+                    if ((dist_sq < 100)) {
+                        selected_cube_index = 1;
+                    }
+                }
+            }
+            if ((has_selection == 1)) {
+                heidic_draw_cube_wireframe(selected_cube_x, selected_cube_y, selected_cube_z, 0, 0, 0, (selected_cube_sx * 1.01), (selected_cube_sy * 1.01), (selected_cube_sz * 1.01), 0, 0, 0);
+                Vec3 new_pos = heidic_gizmo_translate(window, selected_cube_x, selected_cube_y, selected_cube_z);
+                selected_cube_x = new_pos.x;
+                selected_cube_y = new_pos.y;
+                selected_cube_z = new_pos.z;
+                if ((selected_cube_index == 0)) {
+                    cube_x = selected_cube_x;
+                    cube_y = selected_cube_y;
+                    cube_z = selected_cube_z;
+                    player_pos.x = cube_x;
+                    player_pos.y = cube_y;
+                    player_pos.z = cube_z;
+                }
+                if ((selected_cube_index == 1)) {
+                    ref1_x = selected_cube_x;
+                    ref1_y = selected_cube_y;
+                    ref1_z = selected_cube_z;
+                }
+                if ((selected_cube_index >= 2)) {
+                    float cube_storage_index = (selected_cube_index - 2);
+                    heidic_set_cube_pos_f(cube_storage_index, selected_cube_x, selected_cube_y, selected_cube_z);
+                }
+            }
+            if ((show_debug == 1)) {
+                heidic_imgui_text("=== GIZMO DEBUG ===");
+                heidic_imgui_text_float("Selected Index", selected_cube_index);
+                heidic_imgui_text_float("Ref1 X", ref1_x);
+                heidic_imgui_text_float("Ref1 Y", ref1_y);
+                heidic_imgui_text_float("Ref1 Z", ref1_z);
+                heidic_imgui_text_float("Selected X", selected_cube_x);
+                heidic_imgui_text_float("Selected Y", selected_cube_y);
+                heidic_imgui_text_float("Selected Z", selected_cube_z);
+                heidic_imgui_text("=== CREATED CUBES ===");
+                int32_t active_cube_count = heidic_get_cube_count();
+                int32_t total_cube_count = heidic_get_cube_total_count();
+                heidic_imgui_text_float("Active Cubes", heidic_int_to_float(active_cube_count));
+                heidic_imgui_text_float("Total Cubes", heidic_int_to_float(total_cube_count));
+            }
+            if ((selected_cube_index == 0)) {
+                player_pos.x = cube_x;
+                player_pos.y = cube_y;
+                player_pos.z = cube_z;
             }
             float ground_check_distance = 200;
             is_grounded = heidic_raycast_ground_hit(player_pos.x, player_pos.y, player_pos.z, ground_check_distance);
@@ -674,20 +863,13 @@ int heidic_main() {
                 heidic_imgui_text_float("  Ray Dir X", ray_dir.x);
                 heidic_imgui_text_float("  Ray Dir Y", ray_dir.y);
                 heidic_imgui_text_float("  Ray Dir Z", ray_dir.z);
-                heidic_imgui_text("Ray End Point (world):");
-                heidic_imgui_text_float("  Ray End X", line_end.x);
-                heidic_imgui_text_float("  Ray End Y", line_end.y);
-                heidic_imgui_text_float("  Ray End Z", line_end.z);
-                float dist_origin_to_end = ((((line_end.x - ray_origin.x) * (line_end.x - ray_origin.x)) + ((line_end.y - ray_origin.y) * (line_end.y - ray_origin.y))) + ((line_end.z - ray_origin.z) * (line_end.z - ray_origin.z)));
-                float dist_player_to_end = ((((line_end.x - player_pos.x) * (line_end.x - player_pos.x)) + ((line_end.y - player_pos.y) * (line_end.y - player_pos.y))) + ((line_end.z - player_pos.z) * (line_end.z - player_pos.z)));
+                heidic_imgui_text("Camera to Origin Dist:");
                 float dist_camera_to_origin = ((((ray_origin.x - camera_pos.x) * (ray_origin.x - camera_pos.x)) + ((ray_origin.y - camera_pos.y) * (ray_origin.y - camera_pos.y))) + ((ray_origin.z - camera_pos.z) * (ray_origin.z - camera_pos.z)));
-                heidic_imgui_text("Distances:");
-                heidic_imgui_text_float("  Origin to End", dist_origin_to_end);
-                heidic_imgui_text_float("  Player to End", dist_player_to_end);
-                heidic_imgui_text_float("  Camera to Origin", dist_camera_to_origin);
+                heidic_imgui_text_float("  Distance", dist_camera_to_origin);
                 heidic_imgui_text("Selection:");
                 if ((has_selection == 1)) {
                     heidic_imgui_text("  Selected Cube");
+                    heidic_imgui_text_float("  Index", selected_cube_index);
                     heidic_imgui_text_float("  X", selected_cube_x);
                     heidic_imgui_text_float("  Y", selected_cube_y);
                     heidic_imgui_text_float("  Z", selected_cube_z);

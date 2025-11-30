@@ -614,6 +614,54 @@ extern fn heidic_imgui_text_float(label: string, value: f32): void;
 extern fn heidic_imgui_drag_float(label: string, v: f32, speed: f32): f32;
 ```
 
+### Vector Operations
+
+```heidic
+extern fn heidic_vec_copy(src: Vec3): Vec3;
+extern fn heidic_attach_camera_translation(player_translation: Vec3): Vec3;
+extern fn heidic_attach_camera_rotation(player_rotation: Vec3): Vec3;
+```
+
+**`heidic_vec_copy`**: Returns a copy of the source Vec3 value.
+- `src`: Source Vec3 value to copy
+- Returns: A copy of the Vec3
+
+**`heidic_attach_camera_translation`**: Returns the player's translation for camera attachment.
+- `player_translation`: Player's translation Vec3
+- Returns: Player's translation (for assigning to camera)
+
+**`heidic_attach_camera_rotation`**: Returns the player's rotation for camera attachment.
+- `player_rotation`: Player's rotation Vec3
+- Returns: Player's rotation (for assigning to camera)
+
+**Example Usage:**
+```heidic
+struct Transform {
+    translation: Vec3,
+    rotation: Vec3
+}
+
+let camera: Transform = Transform(Vec3(0, 1000, 0), Vec3(-90, 0, 0));
+let player: Transform = Transform(Vec3(0, 0, 0), Vec3(0, 45, 0));
+
+// In game loop - make camera follow player
+while true {
+    // Copy player transform to camera
+    camera.translation = heidic_attach_camera_translation(player.translation);
+    camera.rotation = heidic_attach_camera_rotation(player.rotation);
+    
+    // Or use the generic copy function
+    camera.translation = heidic_vec_copy(player.translation);
+    camera.rotation = heidic_vec_copy(player.rotation);
+    
+    // Update camera with new transform
+    heidic_update_camera(
+        camera.translation.x, camera.translation.y, camera.translation.z,
+        camera.rotation.x, camera.rotation.y, camera.rotation.z
+    );
+}
+```
+
 ### Math Helpers
 
 ```heidic

@@ -1,0 +1,267 @@
+// EDEN ENGINE - FPS Camera Example
+// Features: ImGui, Programmatic Cube, FPS Camera, Frame Control
+
+// Include EDEN Engine standard library
+include "stdlib/eden.hd";
+
+fn main(): void {
+    print("Initializing GLFW...\n");
+    if heidic_glfw_init() == 0 {
+        return;
+    }
+    
+    heidic_glfw_vulkan_hints();
+    let window: GLFWwindow = heidic_create_window(1280, 720, "EDEN ENGINE - FPS Camera");
+    
+    if heidic_init_renderer(window) == 0 {
+        heidic_glfw_terminate();
+        return;
+    }
+    
+    // Player (Cube) Transform - using Vec3 for position and rotation
+    let player_pos: Vec3 = heidic_vec3(0.0, 0.0, 0.0);
+    let player_rot: Vec3 = heidic_vec3(0.0, 0.0, 0.0);
+    
+    // Camera Transform - will follow player with offset
+    // Initial position will be set in loop with offset
+    let camera_pos: Vec3 = heidic_vec3(0.0, 100.0, 0.0); // Will be updated in loop
+    let camera_rot: Vec3 = heidic_vec3(0.0, 0.0, 0.0);
+    
+    // Legacy variables for drawing (will be updated from Vec3)
+    let cube_x: f32 = 0.0;
+    let cube_y: f32 = 0.0;
+    let cube_z: f32 = 0.0;
+    let cube_rx: f32 = 0.0;
+    let cube_ry: f32 = 0.0;
+    let cube_rz: f32 = 0.0;
+    
+    // Cube Size (100 cm = 1 meter)
+    let cube_sx: f32 = 100.0;
+    let cube_sy: f32 = 100.0;
+    let cube_sz: f32 = 100.0;
+    
+    // Movement Speed (cm per frame)
+    let move_speed: f32 = 5.0;
+    
+    // Rotation Speed (degrees per frame)
+    let rot_speed: f32 = 2.0;
+    
+    // Debug UI State
+    let show_debug: i32 = 1;
+    let f1_was_pressed: i32 = 0;
+    
+    // Camera Mode: 0 = Top-Down, 1 = FPS
+    let camera_mode: i32 = 1; // Start in FPS mode
+    let c_was_pressed: i32 = 0;
+    
+    // Top-down camera position (high up, looking down)
+    let topdown_cam_pos: Vec3 = heidic_vec3(0.0, 10000.0, 0.0); // 100 meters up
+    let topdown_cam_rot: Vec3 = heidic_vec3(-90.0, 0.0, 0.0); // Looking straight down
+    
+    print("Starting loop...\n");
+    
+    while heidic_window_should_close(window) == 0 {
+        heidic_poll_events();
+        
+        if heidic_is_key_pressed(window, 256) == 1 { // ESC
+            heidic_set_window_should_close(window, 1);
+        }
+        
+        // F1 Toggle Logic (290 is F1)
+        let f1_is_pressed: i32 = heidic_is_key_pressed(window, 290);
+        if f1_is_pressed == 1 {
+            if f1_was_pressed == 0 {
+                if show_debug == 1 {
+                    show_debug = 0;
+                } else {
+                    show_debug = 1;
+                }
+                f1_was_pressed = 1;
+            }
+        } else {
+            f1_was_pressed = 0;
+        }
+        
+        // C Key Toggle Logic (67 is C) - Switch between Top-Down and FPS camera
+        let c_is_pressed: i32 = heidic_is_key_pressed(window, 67);
+        if c_is_pressed == 1 {
+            if c_was_pressed == 0 {
+                if camera_mode == 0 {
+                    camera_mode = 1; // Switch to FPS
+                } else {
+                    camera_mode = 0; // Switch to Top-Down
+                }
+                c_was_pressed = 1;
+            }
+        } else {
+            c_was_pressed = 0;
+        }
+        
+        // Calculate forward and right direction vectors based on Y rotation
+        // Forward should follow the yellow line (Z-axis) direction
+        // At 0°: forward = (0, 0, -1) = negative Z (model's forward at start)
+        let rot_y_rad: f32 = heidic_convert_degrees_to_radians(player_rot.y);
+        // Forward follows the rotated negative Z-axis (yellow line direction)
+        // Try: forward = (-sin(angle), 0, -cos(angle))
+        let forward_x: f32 = -heidic_sin(rot_y_rad);
+        let forward_z: f32 = -heidic_cos(rot_y_rad);
+        // Right = (cos(angle), 0, -sin(angle))
+        let right_x: f32 = heidic_cos(rot_y_rad);
+        let right_z: f32 = -heidic_sin(rot_y_rad);
+        
+        // WASD Movement Controls (relative to rotation)
+        // W = 87: move forward (in direction player is facing)
+        if heidic_is_key_pressed(window, 87) == 1 {
+            player_pos.x = player_pos.x + forward_x * move_speed;
+            player_pos.z = player_pos.z + forward_z * move_speed;
+        }
+        // S = 83: move backward (opposite of forward)
+        if heidic_is_key_pressed(window, 83) == 1 {
+            player_pos.x = player_pos.x - forward_x * move_speed;
+            player_pos.z = player_pos.z - forward_z * move_speed;
+        }
+        // A = 65: move left (negative right direction)
+        if heidic_is_key_pressed(window, 65) == 1 {
+            player_pos.x = player_pos.x - right_x * move_speed;
+            player_pos.z = player_pos.z - right_z * move_speed;
+        }
+        // D = 68: move right (positive right direction)
+        if heidic_is_key_pressed(window, 68) == 1 {
+            player_pos.x = player_pos.x + right_x * move_speed;
+            player_pos.z = player_pos.z + right_z * move_speed;
+        }
+        
+        // Q = 81: rotate Y up (increase rotation)
+        if heidic_is_key_pressed(window, 81) == 1 {
+            player_rot.y = player_rot.y + rot_speed;
+        }
+        // E = 69: rotate Y down (decrease rotation)
+        if heidic_is_key_pressed(window, 69) == 1 {
+            player_rot.y = player_rot.y - rot_speed;
+        }
+        
+        // Update camera based on mode
+        if camera_mode == 1 {
+            // FPS Mode: Make camera follow player with offset
+            // Add offset to player position (100 units above player = eye height)
+            let offset: Vec3 = heidic_vec3(0.0, 100.0, 0.0);
+            let offset_pos: Vec3 = heidic_vec3_add(player_pos, offset);
+            
+            // Copy offset position to camera position
+            camera_pos = heidic_attach_camera_translation(offset_pos);
+            // Copy player rotation to camera rotation
+            camera_rot = heidic_attach_camera_rotation(player_rot);
+        } else {
+            // Top-Down Mode: Use fixed top-down camera
+            camera_pos = topdown_cam_pos;
+            camera_rot = topdown_cam_rot;
+        }
+        
+        // Update legacy variables for drawing
+        cube_x = player_pos.x;
+        cube_y = player_pos.y;
+        cube_z = player_pos.z;
+        cube_rx = player_rot.x;
+        cube_ry = player_rot.y;
+        cube_rz = player_rot.z;
+        
+        heidic_begin_frame();
+        
+        // Update Camera with Vec3 values
+        // Use larger far plane for top-down view to see distant objects
+        if camera_mode == 0 {
+            // Top-down mode: use 50000 units far plane (500 meters) to see everything
+            heidic_update_camera_with_far(camera_pos.x, camera_pos.y, camera_pos.z, camera_rot.x, camera_rot.y, camera_rot.z, 50000.0);
+        } else {
+            // FPS mode: use default 5000 units far plane (50 meters)
+            heidic_update_camera(camera_pos.x, camera_pos.y, camera_pos.z, camera_rot.x, camera_rot.y, camera_rot.z);
+        }
+        
+        // Draw Player Cube
+        heidic_draw_cube(cube_x, cube_y, cube_z, cube_rx, cube_ry, cube_rz, cube_sx, cube_sy, cube_sz);
+        
+        // Draw Origin Lines (1 meter = 100 cm = 100 units)
+        heidic_draw_model_origin(cube_x, cube_y, cube_z, cube_rx, cube_ry, cube_rz, 100.0);
+        
+        // Draw 10 tall reference cubes in a grid pattern (1000 units tall on Y axis)
+        // Grid: 3x3 pattern with spacing of 2000 units (20 meters)
+        let cube_spacing: f32 = 2000.0; // 20 meters between cubes
+        let cube_height: f32 = 1000.0; // 10 meters tall
+        let cube_size: f32 = 200.0; // 2 meters wide/deep
+        
+        // Row 1: Z = -2000
+        heidic_draw_cube(-cube_spacing, cube_height / 2.0, -cube_spacing, 0.0, 0.0, 0.0, cube_size, cube_height, cube_size);
+        heidic_draw_cube(0.0, cube_height / 2.0, -cube_spacing, 0.0, 0.0, 0.0, cube_size, cube_height, cube_size);
+        heidic_draw_cube(cube_spacing, cube_height / 2.0, -cube_spacing, 0.0, 0.0, 0.0, cube_size, cube_height, cube_size);
+        
+        // Row 2: Z = 0
+        heidic_draw_cube(-cube_spacing, cube_height / 2.0, 0.0, 0.0, 0.0, 0.0, cube_size, cube_height, cube_size);
+        heidic_draw_cube(0.0, cube_height / 2.0, 0.0, 0.0, 0.0, 0.0, cube_size, cube_height, cube_size);
+        heidic_draw_cube(cube_spacing, cube_height / 2.0, 0.0, 0.0, 0.0, 0.0, cube_size, cube_height, cube_size);
+        
+        // Row 3: Z = 2000
+        heidic_draw_cube(-cube_spacing, cube_height / 2.0, cube_spacing, 0.0, 0.0, 0.0, cube_size, cube_height, cube_size);
+        heidic_draw_cube(0.0, cube_height / 2.0, cube_spacing, 0.0, 0.0, 0.0, cube_size, cube_height, cube_size);
+        heidic_draw_cube(cube_spacing, cube_height / 2.0, cube_spacing, 0.0, 0.0, 0.0, cube_size, cube_height, cube_size);
+        
+        // One extra cube further out for reference
+        heidic_draw_cube(cube_spacing * 2.0, cube_height / 2.0, 0.0, 0.0, 0.0, 0.0, cube_size, cube_height, cube_size);
+        
+        // ImGui
+        if show_debug == 1 {
+            heidic_imgui_begin("Debug Panel (F1 to Toggle)");
+            
+            // Display FPS
+            let fps: f32 = heidic_get_fps();
+            heidic_imgui_text_float("FPS", fps);
+            
+            heidic_imgui_text("Camera Mode (C to Toggle): ");
+            if camera_mode == 0 {
+                heidic_imgui_text("Top-Down");
+            } else {
+                heidic_imgui_text("FPS");
+            }
+            
+            heidic_imgui_text("Camera Transform (1 unit = 1 cm)");
+            camera_pos.x = heidic_imgui_drag_float("Cam X", camera_pos.x, 1.0);
+            camera_pos.y = heidic_imgui_drag_float("Cam Y", camera_pos.y, 1.0);
+            camera_pos.z = heidic_imgui_drag_float("Cam Z", camera_pos.z, 1.0);
+            camera_rot.x = heidic_imgui_drag_float("Cam Rot X", camera_rot.x, 1.0);
+            camera_rot.y = heidic_imgui_drag_float("Cam Rot Y", camera_rot.y, 1.0);
+            camera_rot.z = heidic_imgui_drag_float("Cam Rot Z", camera_rot.z, 1.0);
+            
+            heidic_imgui_text("Player Transform");
+            player_pos.x = heidic_imgui_drag_float("Player X", player_pos.x, 1.0);
+            player_pos.y = heidic_imgui_drag_float("Player Y", player_pos.y, 1.0);
+            player_pos.z = heidic_imgui_drag_float("Player Z", player_pos.z, 1.0);
+            player_rot.x = heidic_imgui_drag_float("Player Rot X", player_rot.x, 1.0);
+            player_rot.y = heidic_imgui_drag_float("Player Rot Y", player_rot.y, 1.0);
+            player_rot.z = heidic_imgui_drag_float("Player Rot Z", player_rot.z, 1.0);
+            
+            cube_sx = heidic_imgui_drag_float("Cube Scale X", cube_sx, 1.0);
+            cube_sy = heidic_imgui_drag_float("Cube Scale Y", cube_sy, 1.0);
+            cube_sz = heidic_imgui_drag_float("Cube Scale Z", cube_sz, 1.0);
+            
+            // Display direction vectors
+            heidic_imgui_text("Direction Vectors (W moves in Forward direction)");
+            let debug_rot_y_rad: f32 = heidic_convert_degrees_to_radians(player_rot.y);
+            let debug_forward_x: f32 = -heidic_sin(debug_rot_y_rad);
+            let debug_forward_z: f32 = -heidic_cos(debug_rot_y_rad);
+            let debug_right_x: f32 = heidic_cos(debug_rot_y_rad);
+            let debug_right_z: f32 = -heidic_sin(debug_rot_y_rad);
+            heidic_imgui_text_float("Forward X", debug_forward_x);
+            heidic_imgui_text_float("Forward Z", debug_forward_z);
+            heidic_imgui_text_float("Right X", debug_right_x);
+            heidic_imgui_text_float("Right Z", debug_right_z);
+            
+            heidic_imgui_end();
+        }
+        
+        heidic_end_frame();
+    }
+    
+    heidic_cleanup_renderer();
+    heidic_destroy_window(window);
+    heidic_glfw_terminate();
+}
+

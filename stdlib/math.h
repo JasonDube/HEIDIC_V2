@@ -38,6 +38,16 @@ struct Vec4 {
     operator glm::vec4() const { return glm::vec4(x, y, z, w); }
 };
 
+struct Camera {
+    Vec3 pos;
+    Vec3 rot;
+    float clip_near;
+    float clip_far;
+    Camera() : pos(0.0f, 0.0f, 0.0f), rot(0.0f, 0.0f, 0.0f), clip_near(0.1f), clip_far(5000.0f) {}
+    Camera(Vec3 pos, Vec3 rot, float clip_near, float clip_far) 
+        : pos(pos), rot(rot), clip_near(clip_near), clip_far(clip_far) {}
+};
+
 struct Mat4 {
     glm::mat4 data;
     float m[16]; // Compatibility accessor (column-major)

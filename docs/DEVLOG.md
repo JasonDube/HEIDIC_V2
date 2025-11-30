@@ -694,6 +694,162 @@ Even after fixing the ray direction, we hit one last wall: selection stopped wor
 
 ...and Gemini 3 saves the day AGAIN! Give that robot a pat on the back.
 
+### 12. GIZMO TRANSLATION & DYNAMIC CUBE CREATION: 11/29/2025 (Nov 29, 2025)
+**AI Assistant:** Claude Sonnet 4.5
+**Date:** November 29, 2025
+
+Implemented object manipulation via translation gizmos and a dynamic cube creation system that supports unlimited level assets.
+
+#### The Problem
+After getting ray picking working, we needed:
+1. **Visual feedback for selection** - Users needed to see which object was selected
+2. **Object manipulation** - Selected objects needed to be moveable via a gizmo
+3. **Level building** - Developers needed to create arbitrary numbers of cubes, not just a fixed set
+
+#### The Solution
+
+**1. Translation Gizmo Implementation**
+
+Created a 3-axis translation gizmo (RGB = XYZ) that allows dragging objects in 3D space:
+
+```cpp
+Vec3 heidic_gizmo_translate(GLFWwindow* window, float x, float y, float z);
+int heidic_gizmo_is_interacting();  // Returns 1 if gizmo is being dragged
+```
+
+**Gizmo Features:**
+- **RGB Axes**: Red (X), Green (Y), Blue (Z) lines extending from object center
+- **Hover Detection**: Axes highlight when mouse hovers over them
+- **Drag Interaction**: Click and drag an axis to move the object along that axis
+- **Closest Distance Algorithm**: Uses line-to-line distance calculation to determine which axis is being dragged
+- **Interaction Lock**: Prevents new selections while dragging the gizmo
+
+**Implementation Details:**
+- Gizmo state stored in static variables (`g_gizmoActiveAxis`, `g_gizmoInitialPos`, `g_gizmoDragOffset`)
+- Uses `closestDistanceBetweenLines()` helper to find closest points between mouse ray and gizmo axis lines
+- Returns new position as `Vec3` that updates the selected object
+
+**2. Selection Wireframe Overlay**
+
+Added visual feedback for selected objects:
+```cpp
+void heidic_draw_cube_wireframe(float x, float y, float z, float rx, float ry, float rz, 
+                                 float sx, float sy, float sz, float r, float g, float b);
+```
+- Draws black wireframe outline around selected cube (1% larger than actual cube)
+- Provides clear visual indication of what's selected
+
+**3. Dynamic Cube Storage System**
+
+Replaced the limited variable-based cube system (max 5 cubes) with a C++ vector-based dynamic storage:
+
+**C++ Storage:**
+```cpp
+struct CreatedCube {
+    float x, y, z;
+    float sx, sy, sz;  // size
+    int active;  // 1 = exists, 0 = deleted
+};
+static std::vector<CreatedCube> g_createdCubes;
+```
+
+**HEIDIC API:**
+```heidi
+extern fn heidic_create_cube(x: f32, y: f32, z: f32, sx: f32, sy: f32, sz: f32): i32;
+extern fn heidic_get_cube_count(): i32;  // Active cubes
+extern fn heidic_get_cube_total_count(): i32;  // Total (including deleted)
+extern fn heidic_get_cube_x(index: i32): f32;
+extern fn heidic_get_cube_y(index: i32): f32;
+extern fn heidic_get_cube_z(index: i32): f32;
+extern fn heidic_set_cube_pos_f(index: f32, x: f32, y: f32, z: f32): void;
+extern fn heidic_delete_cube(index: i32): void;
+```
+
+**4. Spacebar Cube Creation**
+
+Implemented cube creation via spacebar:
+- Press **Spacebar** → Creates cube at mouse ray hit point on ground plane
+- If no ground hit, places cube 50 units along the ray
+- Cubes placed 1 meter above ground when ground is hit
+- Each cube gets a unique index (stored in C++ vector)
+- No limit on number of cubes
+
+**5. Type System Challenges**
+
+HEIDIC's strict type system required helper functions for type conversions:
+- Added `heidic_int_to_float(int value): float` to convert `i32` to `f32`
+- Created `heidic_set_cube_pos_f()` overload that accepts `f32` index (since `selected_cube_index` is `f32`)
+- Fixed multiple type mismatch errors during implementation
+
+**6. Selection & Gizmo Integration**
+
+**Selection Index Mapping:**
+- Player Cube: Index `0.0`
+- Reference Cube 1: Index `1.0`
+- Created Cubes: Indices `2.0+` (cube storage index + 2.0)
+
+**Gizmo Update Logic:**
+```heidi
+if selected_cube_index >= 2.0 {
+    let cube_storage_index: f32 = selected_cube_index - 2.0;
+    heidic_set_cube_pos_f(cube_storage_index, selected_cube_x, selected_cube_y, selected_cube_z);
+}
+```
+
+**Drawing Loop:**
+All created cubes are drawn each frame via a `while` loop iterating through the storage vector:
+```heidi
+let cube_draw_index: i32 = 0;
+let total_cubes: i32 = heidic_get_cube_total_count();
+while cube_draw_index < total_cubes {
+    if heidic_get_cube_active(cube_draw_index) == 1 {
+        // Draw cube at heidic_get_cube_x/y/z(cube_draw_index)
+    }
+    cube_draw_index = cube_draw_index + 1;
+}
+```
+
+**Selection Loop:**
+All created cubes are tested for raycast hits in a similar loop, finding the closest hit.
+
+#### Result
+- **Unlimited Cubes**: Developers can now create as many level assets as needed
+- **Visual Selection**: Clear wireframe feedback shows what's selected
+- **Intuitive Manipulation**: RGB gizmo allows precise 3-axis translation
+- **Seamless Integration**: Created cubes work identically to pre-placed cubes (selection, gizmo, etc.)
+
+#### Files Modified
+
+- **`vulkan/eden_vulkan_helpers.cpp/h`**: 
+  - Added `heidic_gizmo_translate()` and `heidic_gizmo_is_interacting()`
+  - Added `heidic_draw_cube_wireframe()`
+  - Added dynamic cube storage system (vector + all getter/setter functions)
+  - Added `heidic_int_to_float()` helper for type conversion
+- **`stdlib/eden.hd`**: Added extern declarations for all new functions
+- **`examples/gateway_editor_v1/gateway_editor_v1.hd`**: 
+  - Replaced variable-based cube system with dynamic storage
+  - Added spacebar cube creation
+  - Integrated gizmo for all selectable objects
+  - Added selection wireframe drawing
+  - Updated drawing and selection loops to iterate through all cubes
+
+#### Technical Notes
+
+**Gizmo Algorithm:**
+The gizmo uses a closest-distance-between-lines algorithm to determine which axis is being dragged. For each axis, it calculates the closest points between:
+1. The mouse ray (from camera through mouse cursor)
+2. The gizmo axis line (from object center along X/Y/Z)
+
+The axis with the smallest distance is considered "hovered" or "dragged".
+
+**Index Mapping:**
+The `selected_cube_index` system uses floats to distinguish between different object types:
+- `0.0` = Player cube
+- `1.0` = Reference cube 1
+- `2.0+` = Created cubes (mapped to storage index by subtracting 2.0)
+
+This allows a single selection system to handle all object types while maintaining type safety.
+
 ### Path Forward & Preservation
 
 To ensure this victory cannot be undone:

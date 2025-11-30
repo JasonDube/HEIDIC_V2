@@ -1,0 +1,49 @@
+// Test new syntax features: default parameters, named arguments, pipe operator
+
+fn spawn_particle(pos: Vec3 = Vec3(0, 0, 0), vel: Vec3 = Vec3(0, 0, 0)): void {
+    print("Spawned particle\n");
+}
+
+fn create_buffer(size: i32, usage: i32, memory: i32): void {
+    print("Created buffer\n");
+}
+
+fn begin(): void {
+    print("Begin\n");
+}
+
+fn bind_pipeline(stage: i32, pipeline: i32): void {
+    print("Bind pipeline\n");
+}
+
+fn draw(vertex_count: i32, instance_count: i32, first_vertex: i32, first_instance: i32): void {
+    print("Draw\n");
+}
+
+fn end(): void {
+    print("End\n");
+}
+
+fn main(): void {
+    // Default parameters
+    spawn_particle();
+    spawn_particle(Vec3(1, 2, 3));
+    
+    // Named arguments
+    create_buffer(
+        size = 64,
+        usage = 1 | 2,
+        memory = 3
+    );
+    
+    // Pipe operator
+    let command_buffer: i32 = 0;
+    command_buffer
+        |> begin()
+        |> bind_pipeline(0, 1)
+        |> draw(3, 1, 0, 0)
+        |> end();
+    
+    print("Syntax test complete\n");
+}
+
