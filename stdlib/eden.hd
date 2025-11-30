@@ -1,0 +1,79 @@
+// EDEN ENGINE Standard Library
+// Common extern function declarations for EDEN Engine API
+
+// GLFW Window Management
+extern fn heidic_glfw_init(): i32;
+extern fn heidic_glfw_terminate(): void;
+extern fn heidic_create_window(width: i32, height: i32, title: string): GLFWwindow;
+extern fn heidic_destroy_window(window: GLFWwindow): void;
+extern fn heidic_set_window_should_close(window: GLFWwindow, value: i32): void;
+extern fn heidic_get_key(window: GLFWwindow, key: i32): i32;
+extern fn heidic_set_video_mode(windowed: i32): void; // 0 = fullscreen, 1 = windowed
+extern fn heidic_glfw_vulkan_hints(): void;
+extern fn heidic_window_should_close(window: GLFWwindow): i32;
+extern fn heidic_poll_events(): void;
+extern fn heidic_is_key_pressed(window: GLFWwindow, key: i32): i32;
+extern fn heidic_is_mouse_button_pressed(window: GLFWwindow, button: i32): i32;
+
+// Renderer Initialization
+extern fn heidic_init_renderer(window: GLFWwindow): i32;
+extern fn heidic_cleanup_renderer(): void;
+
+// Frame Control
+extern fn heidic_begin_frame(): void;
+extern fn heidic_end_frame(): void;
+
+// Drawing Functions
+extern fn heidic_draw_cube(x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32, sx: f32, sy: f32, sz: f32): void;
+extern fn heidic_draw_line(x1: f32, y1: f32, z1: f32, x2: f32, y2: f32, z2: f32, r: f32, g: f32, b: f32): void;
+extern fn heidic_draw_model_origin(x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32, length: f32): void;
+
+// Camera Functions
+extern fn heidic_update_camera(px: f32, py: f32, pz: f32, rx: f32, ry: f32, rz: f32): void;
+extern fn heidic_update_camera_with_far(px: f32, py: f32, pz: f32, rx: f32, ry: f32, rz: f32, far_plane: f32): void;
+extern fn heidic_create_camera(pos: Vec3, rot: Vec3, clip_near: f32, clip_far: f32): Camera;
+extern fn heidic_update_camera_from_struct(camera: Camera): void;
+
+// Mesh Loading
+extern fn heidic_load_ascii_model(filename: string): i32;
+extern fn heidic_draw_mesh(mesh_id: i32, x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32): void;
+
+// ImGui Functions
+extern fn heidic_imgui_init(window: GLFWwindow): void;
+extern fn heidic_imgui_begin(name: string): void;
+extern fn heidic_imgui_end(): void;
+extern fn heidic_imgui_text(text: string): void;
+extern fn heidic_imgui_text_float(label: string, value: f32): void;
+extern fn heidic_imgui_drag_float(label: string, v: f32, speed: f32): f32;
+extern fn heidic_get_fps(): f32;
+
+// Math Functions
+extern fn heidic_convert_degrees_to_radians(degrees: f32): f32;
+extern fn heidic_convert_radians_to_degrees(radians: f32): f32;
+extern fn heidic_sin(radians: f32): f32;
+extern fn heidic_cos(radians: f32): f32;
+
+// Vector Operations
+extern fn heidic_vec3(x: f32, y: f32, z: f32): Vec3;
+extern fn heidic_vec3_add(a: Vec3, b: Vec3): Vec3;
+extern fn heidic_vec_copy(src: Vec3): Vec3;
+extern fn heidic_attach_camera_translation(player_translation: Vec3): Vec3;
+extern fn heidic_attach_camera_rotation(player_rotation: Vec3): Vec3;
+
+// Utility
+extern fn heidic_sleep_ms(ms: i32): void;
+
+// Raycasting
+extern fn heidic_get_mouse_x(window: GLFWwindow): f32;
+extern fn heidic_get_mouse_y(window: GLFWwindow): f32;
+extern fn heidic_get_mouse_scroll_y(window: GLFWwindow): f32; // Get vertical scroll delta
+extern fn heidic_get_mouse_ray_origin(window: GLFWwindow): Vec3;
+extern fn heidic_get_mouse_ray_dir(window: GLFWwindow): Vec3;
+extern fn heidic_raycast_cube_hit(window: GLFWwindow, cubeX: f32, cubeY: f32, cubeZ: f32, cubeSx: f32, cubeSy: f32, cubeSz: f32): i32;
+extern fn heidic_raycast_cube_hit_point(window: GLFWwindow, cubeX: f32, cubeY: f32, cubeZ: f32, cubeSx: f32, cubeSy: f32, cubeSz: f32): Vec3;
+extern fn heidic_draw_cube_wireframe(x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32, sx: f32, sy: f32, sz: f32, r: f32, g: f32, b: f32): void;
+extern fn heidic_draw_ground_plane(size: f32, r: f32, g: f32, b: f32): void;
+extern fn heidic_raycast_ground_hit(x: f32, y: f32, z: f32, maxDistance: f32): i32;
+extern fn heidic_raycast_ground_hit_point(x: f32, y: f32, z: f32, maxDistance: f32): Vec3;
+extern fn heidic_debug_print_ray(window: GLFWwindow): void;
+

@@ -54,6 +54,8 @@ pub enum Token {
     TessellationControl,
     #[token("tessellation_evaluation")]
     TessellationEvaluation,
+    #[token("include")]
+    Include,
     
     // Types
     #[token("i32")]
@@ -122,6 +124,8 @@ pub enum Token {
     Vec4,
     #[token("Mat4")]
     Mat4,
+    #[token("Camera")]
+    Camera,
     #[token("FrameArena")]
     FrameArena,
     
@@ -168,6 +172,10 @@ pub enum Token {
     AndAnd,
     #[token("||")]
     OrOr,
+    #[token("|")]
+    Pipe,
+    #[token("|>")]
+    PipeOp,
     #[token("!")]
     Bang,
     #[token("=")]

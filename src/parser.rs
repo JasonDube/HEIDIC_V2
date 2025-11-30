@@ -1,10 +1,15 @@
 use crate::ast::*;
-use crate::lexer::Token;
-use anyhow::{Result, bail};
+use crate::lexer::{Token, Lexer};
+use anyhow::{Result, bail, Context};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::collections::HashSet;
 
 pub struct Parser {
     tokens: Vec<Token>,
     current: usize,
+    current_file: Option<PathBuf>, // Track current file for relative includes
+    included_files: HashSet<PathBuf>, // Track included files to prevent circular includes
 }
 
 impl Parser {
@@ -12,6 +17,19 @@ impl Parser {
         Self {
             tokens,
             current: 0,
+            current_file: None,
+            included_files: HashSet::new(),
+        }
+    }
+    
+    pub fn new_with_file(tokens: Vec<Token>, file_path: PathBuf) -> Self {
+        let mut included = HashSet::new();
+        included.insert(file_path.clone());
+        Self {
+            tokens,
+            current: 0,
+            current_file: Some(file_path),
+            included_files: included,
         }
     }
     
@@ -19,10 +37,110 @@ impl Parser {
         let mut items = Vec::new();
         
         while !self.is_at_end() {
-            items.push(self.parse_item()?);
+            let item = self.parse_item()?;
+            match item {
+                Item::Include(path) => {
+                    // Process include: read file, parse it, merge items
+                    let included_items = self.process_include(&path)?;
+                    items.extend(included_items);
+                }
+                _ => {
+                    items.push(item);
+                }
+            }
         }
         
         Ok(Program { items })
+    }
+    
+    fn process_include(&mut self, include_path: &str) -> Result<Vec<Item>> {
+        // Resolve include path
+        // If path starts with "stdlib/", resolve relative to project root
+        // Otherwise, resolve relative to current file
+        let resolved_path = if include_path.starts_with("stdlib/") {
+            // For stdlib includes, resolve relative to project root
+            if let Some(ref current_file) = self.current_file {
+                // Extract path before mutable borrow
+                let current_file_path = current_file.clone();
+                
+                // Try to find project root by looking for Cargo.toml
+                let mut search_path = current_file_path.parent();
+                let mut project_root: Option<PathBuf> = None;
+                
+                while let Some(parent) = search_path {
+                    let cargo_toml = parent.join("Cargo.toml");
+                    if cargo_toml.exists() {
+                        project_root = Some(parent.to_path_buf());
+                        break;
+                    }
+                    search_path = parent.parent();
+                }
+                
+                // If we found project root, use it
+                if let Some(root) = project_root {
+                    return Ok(self.process_include_from_root(&root, include_path)?);
+                }
+                
+                // Fallback: if file is in examples/, go up 2 levels
+                let file_str = current_file_path.to_string_lossy();
+                if file_str.contains("examples") {
+                    if let Some(examples_dir) = current_file_path.parent() {
+                        if let Some(project_root) = examples_dir.parent() {
+                            let project_root_buf = project_root.to_path_buf();
+                            return Ok(self.process_include_from_root(&project_root_buf, include_path)?);
+                        }
+                    }
+                }
+                
+                // Last resort: try relative to current file
+                PathBuf::from(include_path)
+            } else {
+                PathBuf::from(include_path)
+            }
+        } else {
+            // Resolve relative to current file
+            if let Some(ref current_file) = self.current_file {
+                let current_dir = current_file.parent().unwrap_or(Path::new("."));
+                current_dir.join(include_path)
+            } else {
+                PathBuf::from(include_path)
+            }
+        };
+        
+        // Continue with existing logic
+        self.process_include_path(resolved_path)
+    }
+    
+    fn process_include_from_root(&mut self, project_root: &Path, include_path: &str) -> Result<Vec<Item>> {
+        let resolved_path = project_root.join(include_path);
+        self.process_include_path(resolved_path)
+    }
+    
+    fn process_include_path(&mut self, resolved_path: PathBuf) -> Result<Vec<Item>> {
+        
+        // Check for circular includes
+        if self.included_files.contains(&resolved_path) {
+            bail!("Circular include detected: {}", resolved_path.display());
+        }
+        
+        // Read and parse included file
+        let source = fs::read_to_string(&resolved_path)
+            .with_context(|| format!("Failed to read included file: {}", resolved_path.display()))?;
+        
+        let mut lexer = Lexer::new(&source);
+        let tokens = lexer.tokenize()?;
+        
+        // Create new parser for included file
+        let mut included_parser = Parser {
+            tokens,
+            current: 0,
+            current_file: Some(resolved_path.clone()),
+            included_files: self.included_files.clone(),
+        };
+        included_parser.included_files.insert(resolved_path);
+        
+        let included_program = included_parser.parse()?;
+        Ok(included_program.items)
     }
     
     fn parse_item(&mut self) -> Result<Item> {
@@ -59,11 +177,27 @@ impl Parser {
                 self.advance();
                 Ok(Item::TypeAlias(self.parse_type_alias()?))
             }
+            Token::Include => {
+                self.advance();
+                Ok(Item::Include(self.parse_include()?))
+            }
             Token::Fn => {
                 self.advance();
                 Ok(Item::Function(self.parse_function()?))
             }
             _ => bail!("Unexpected token at item level: {:?}", self.peek()),
+        }
+    }
+    
+    fn parse_include(&mut self) -> Result<String> {
+        // Parse: include "path/to/file.hd"
+        if let Token::StringLit(path) = self.peek() {
+            let path = path.clone();
+            self.advance();
+            self.expect(&Token::Semicolon)?;
+            Ok(path)
+        } else {
+            bail!("Expected string literal after include");
         }
     }
     
@@ -260,9 +394,19 @@ impl Parser {
                 let param_name = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let param_type = self.parse_type()?;
+                
+                // Parse optional default value
+                let default_value = if self.check(&Token::Eq) {
+                    self.advance();
+                    Some(self.parse_expression()?)
+                } else {
+                    None
+                };
+                
                 params.push(Param {
                     name: param_name,
                     ty: param_type,
+                    default_value,
                 });
                 
                 if !self.check(&Token::Comma) {
@@ -335,9 +479,18 @@ impl Parser {
                 let param_name = self.expect_ident()?;
                 self.expect(&Token::Colon)?;
                 let param_type = self.parse_type()?;
+                // Parse optional default value
+                let default_value = if self.check(&Token::Eq) {
+                    self.advance();
+                    Some(self.parse_expression()?)
+                } else {
+                    None
+                };
+                
                 params.push(Param {
                     name: param_name,
                     ty: param_type,
+                    default_value,
                 });
                 
                 if !self.check(&Token::Comma) {
@@ -501,6 +654,10 @@ impl Parser {
                 self.advance();
                 Ok(Type::Mat4)
             }
+            Token::Camera => {
+                self.advance();
+                Ok(Type::Camera)
+            }
             Token::FrameArena => {
                 self.advance();
                 Ok(Type::FrameArena)
@@ -646,13 +803,32 @@ impl Parser {
     }
     
     fn parse_or(&mut self) -> Result<Expression> {
-        let mut expr = self.parse_and()?;
+        let mut expr = self.parse_pipe()?;
         
         while self.check(&Token::OrOr) {
             self.advance();
-            let right = self.parse_and()?;
+            let right = self.parse_pipe()?;
             expr = Expression::BinaryOp {
                 op: BinaryOp::Or,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        
+        Ok(expr)
+    }
+    
+    fn parse_pipe(&mut self) -> Result<Expression> {
+        let mut expr = self.parse_and()?;
+        
+        while self.check(&Token::PipeOp) {
+            self.advance();
+            let right = self.parse_and()?;
+            // Pipe operator: a |> f() becomes f(a)
+            // We need to transform this into a function call
+            // For now, we'll handle it as a special binary op that codegen will transform
+            expr = Expression::BinaryOp {
+                op: BinaryOp::Pipe,
                 left: Box::new(expr),
                 right: Box::new(right),
             };
@@ -700,7 +876,7 @@ impl Parser {
     }
     
     fn parse_comparison(&mut self) -> Result<Expression> {
-        let mut expr = self.parse_term()?;
+        let mut expr = self.parse_bitwise_or()?;
         
         while matches!(self.peek(), Token::Lt | Token::Le | Token::Gt | Token::Ge) {
             let op = match self.peek() {
@@ -722,9 +898,39 @@ impl Parser {
                 }
                 _ => unreachable!(),
             };
-            let right = self.parse_term()?;
+            let right = self.parse_bitwise_or()?;
             expr = Expression::BinaryOp {
                 op,
+                left: Box::new(expr),
+                right: Box::new(right),
+            };
+        }
+        
+        Ok(expr)
+    }
+    
+    fn parse_bitwise_or(&mut self) -> Result<Expression> {
+        let mut expr = self.parse_term()?;
+        
+        // Parse | operator (but not |> which is PipeOp)
+        while self.check(&Token::Pipe) {
+            // Check if next token would make this |> instead of |
+            if self.current < self.tokens.len() - 1 {
+                // Peek ahead - if next is >, this is actually |> 
+                match &self.tokens[self.current + 1] {
+                    Token::Gt => {
+                        // This is |> not |, so don't parse as bitwise OR
+                        break;
+                    }
+                    _ => {
+                        // This is a real | operator
+                    }
+                }
+            }
+            self.advance();
+            let right = self.parse_term()?;
+            expr = Expression::BinaryOp {
+                op: BinaryOp::BitwiseOr,
                 left: Box::new(expr),
                 right: Box::new(right),
             };
@@ -813,22 +1019,69 @@ impl Parser {
         loop {
             if self.check(&Token::LParen) {
                 self.advance();
-                let mut args = Vec::new();
-                if !self.check(&Token::RParen) {
-                    loop {
-                        args.push(self.parse_expression()?);
-                        if !self.check(&Token::Comma) {
-                            break;
-                        }
-                        self.advance();
-                    }
-                }
-                self.expect(&Token::RParen)?;
                 
-                if let Expression::Variable(name) = expr {
-                    expr = Expression::Call { name, args };
+                // Check if this is a named argument call (name = value)
+                let first_token = self.peek().clone();
+                let is_named = if let Token::Ident(_) = first_token {
+                    // Look ahead to see if next token is =
+                    let saved_current = self.current;
+                    if let Ok(_) = self.expect_ident() {
+                        if self.check(&Token::Eq) {
+                            self.current = saved_current; // Reset
+                            true
+                        } else {
+                            self.current = saved_current; // Reset
+                            false
+                        }
+                    } else {
+                        false
+                    }
                 } else {
-                    bail!("Expected function name");
+                    false
+                };
+                
+                if is_named {
+                    // Parse named arguments: f(a = 1, b = 2)
+                    let mut named_args = Vec::new();
+                    if !self.check(&Token::RParen) {
+                        loop {
+                            let arg_name = self.expect_ident()?;
+                            self.expect(&Token::Eq)?;
+                            let arg_value = self.parse_expression()?;
+                            named_args.push((arg_name, arg_value));
+                            
+                            if !self.check(&Token::Comma) {
+                                break;
+                            }
+                            self.advance();
+                        }
+                    }
+                    self.expect(&Token::RParen)?;
+                    
+                    if let Expression::Variable(name) = expr {
+                        expr = Expression::NamedCall { name, named_args };
+                    } else {
+                        bail!("Expected function name for named arguments");
+                    }
+                } else {
+                    // Regular positional arguments
+                    let mut args = Vec::new();
+                    if !self.check(&Token::RParen) {
+                        loop {
+                            args.push(self.parse_expression()?);
+                            if !self.check(&Token::Comma) {
+                                break;
+                            }
+                            self.advance();
+                        }
+                    }
+                    self.expect(&Token::RParen)?;
+                    
+                    if let Expression::Variable(name) = expr {
+                        expr = Expression::Call { name, args };
+                    } else {
+                        bail!("Expected function name");
+                    }
                 }
             } else if self.check(&Token::Dot) {
                 self.advance();
@@ -919,11 +1172,50 @@ impl Parser {
         match token {
             Token::Int(n) => {
                 self.advance();
-                Ok(Expression::Literal(Literal::Int(n)))
+                // Check for unit suffix: 64.MiB
+                if self.check(&Token::Dot) {
+                    self.advance();
+                    if let Token::Ident(ref unit) = *self.peek() {
+                        let unit_upper = unit.to_uppercase();
+                        if unit_upper == "MIB" || unit_upper == "KIB" || unit_upper == "GIB" {
+                            self.advance();
+                            Ok(Expression::UnitSuffix {
+                                value: Box::new(Expression::Literal(Literal::Int(n))),
+                                unit: unit_upper.clone(),
+                            })
+                        } else {
+                            // Not a unit, treat as member access
+                            Ok(Expression::Literal(Literal::Int(n)))
+                        }
+                    } else {
+                        Ok(Expression::Literal(Literal::Int(n)))
+                    }
+                } else {
+                    Ok(Expression::Literal(Literal::Int(n)))
+                }
             }
             Token::Float(n) => {
                 self.advance();
-                Ok(Expression::Literal(Literal::Float(n)))
+                // Check for unit suffix: 64.5.MiB
+                if self.check(&Token::Dot) {
+                    self.advance();
+                    if let Token::Ident(ref unit) = *self.peek() {
+                        let unit_upper = unit.to_uppercase();
+                        if unit_upper == "MIB" || unit_upper == "KIB" || unit_upper == "GIB" {
+                            self.advance();
+                            Ok(Expression::UnitSuffix {
+                                value: Box::new(Expression::Literal(Literal::Float(n))),
+                                unit: unit_upper.clone(),
+                            })
+                        } else {
+                            Ok(Expression::Literal(Literal::Float(n)))
+                        }
+                    } else {
+                        Ok(Expression::Literal(Literal::Float(n)))
+                    }
+                } else {
+                    Ok(Expression::Literal(Literal::Float(n)))
+                }
             }
             Token::True => {
                 self.advance();

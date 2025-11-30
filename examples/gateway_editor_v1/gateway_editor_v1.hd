@@ -337,12 +337,21 @@ fn main(): void {
         // Mouse click detection (Left mouse button = 0, GLFW_MOUSE_BUTTON_LEFT)
         let mouse_left_pressed: i32 = heidic_is_mouse_button_pressed(window, 0);
         
+        // DEBUG: Print ray info on click
+        if mouse_left_pressed == 1 {
+            if mouse_left_was_pressed == 0 {
+                heidic_debug_print_ray(window);
+            }
+        }
+        
         // Selection: Click to select cubes - test ALL cubes
         if mouse_left_pressed == 1 {
             if mouse_left_was_pressed == 0 {
                 // Just clicked - test raycast against all cubes and find closest hit
                 has_selection = 0;
-                let closest_dist: f32 = 999999.0; // Large number
+                // Initialize closest_dist to a very large number (squared distance)
+                // 100,000,000,000.0 is roughly 316,000 units (3.16 km) distance
+                let closest_dist: f32 = 100000000000.0; 
                 
                 // Test player cube
                 let player_hit: i32 = heidic_raycast_cube_hit(window, cube_x, cube_y, cube_z, cube_sx, cube_sy, cube_sz);

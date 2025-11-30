@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 mod lexer;
@@ -57,8 +57,9 @@ fn compile_file(file_path: &str) -> Result<()> {
     let mut lexer = Lexer::new(&source);
     let tokens = lexer.tokenize()?;
     
-    // Parsing
-    let mut parser = Parser::new(tokens);
+    // Parsing (with file path for include resolution)
+    let file_path_buf = PathBuf::from(file_path);
+    let mut parser = Parser::new_with_file(tokens, file_path_buf);
     let ast = parser.parse()?;
     
     // Type checking

@@ -25,13 +25,32 @@ impl CodeGenerator {
         output.push_str("#include <cstdint>\n");
         output.push_str("\n");
         
-        // Include EDEN standard library (Vulkan, GLFW, GLM math, ImGui)
-        output.push_str("// EDEN ENGINE Standard Library\n");
-        output.push_str("#include \"stdlib/vulkan.h\"\n");
-        output.push_str("#include \"stdlib/glfw.h\"\n");
-        output.push_str("#include \"stdlib/math.h\"\n");
-        output.push_str("#include \"stdlib/eden_imgui.h\"\n");
-        output.push_str("\n");
+        // Include EDEN standard library headers only if needed
+        // Check what types/functions are used in the program
+        let mut needs_vulkan = false;
+        let mut needs_glfw = false;
+        let mut needs_math = false;
+        let mut needs_imgui = false;
+        
+        // Scan program for types that require specific headers
+        self.scan_for_required_headers(&program, &mut needs_vulkan, &mut needs_glfw, &mut needs_math, &mut needs_imgui);
+        
+        if needs_vulkan || needs_glfw || needs_math || needs_imgui {
+            output.push_str("// EDEN ENGINE Standard Library\n");
+            if needs_vulkan {
+                output.push_str("#include \"stdlib/vulkan.h\"\n");
+            }
+            if needs_glfw {
+                output.push_str("#include \"stdlib/glfw.h\"\n");
+            }
+            if needs_math {
+                output.push_str("#include \"stdlib/math.h\"\n");
+            }
+            if needs_imgui {
+                output.push_str("#include \"stdlib/eden_imgui.h\"\n");
+            }
+            output.push_str("\n");
+        }
         
         // Generate FrameArena allocator implementation
         output.push_str(&self.generate_frame_arena());
@@ -126,6 +145,9 @@ impl CodeGenerator {
                     output.push_str(&format!("{} {}", 
                         self.type_to_cpp_extern(&param.ty), 
                         param.name));
+                    if let Some(ref default_expr) = param.default_value {
+                        output.push_str(&format!(" = {}", self.generate_expression(default_expr)));
+                    }
                 }
                 output.push_str(");\n");
                 output.push_str("}\n");
@@ -471,7 +493,7 @@ impl CodeGenerator {
         
         output.push_str(&format!("{} {}(", return_type, func_name));
         
-        // Parameters
+        // Parameters with default values
         for (i, param) in f.params.iter().enumerate() {
             if i > 0 {
                 output.push_str(", ");
@@ -479,6 +501,9 @@ impl CodeGenerator {
             output.push_str(&format!("{} {}", 
                 self.type_to_cpp(&param.ty), 
                 param.name));
+            if let Some(ref default_expr) = param.default_value {
+                output.push_str(&format!(" = {}", self.generate_expression(default_expr)));
+            }
         }
         output.push_str(") {\n");
         
@@ -585,6 +610,20 @@ impl CodeGenerator {
                 }
             }
             Expression::Variable(name) => name.clone(),
+            Expression::BinaryOp { op: BinaryOp::Pipe, left, right } => {
+                // Pipe operator: a |> f() -> f(a)
+                let left_str = self.generate_expression(left);
+                let right_str = self.generate_expression(right);
+                
+                // If right is a function call, inject left as first argument
+                if right_str.contains('(') {
+                    // Simple heuristic: replace first ( with (left_str, 
+                    right_str.replacen("(", &format!("({}", left_str), 1)
+                } else {
+                    // If not a call, treat as method: right(left)
+                    format!("{}({})", right_str, left_str)
+                }
+            }
             Expression::BinaryOp { op, left, right } => {
                 let op_str = match op {
                     BinaryOp::Add => "+",
@@ -600,6 +639,8 @@ impl CodeGenerator {
                     BinaryOp::Ge => ">=",
                     BinaryOp::And => "&&",
                     BinaryOp::Or => "||",
+                    BinaryOp::BitwiseOr => "|",
+                    BinaryOp::Pipe => unreachable!(), // Handled above
                 };
                 format!("({} {} {})", 
                     self.generate_expression(left),
@@ -644,16 +685,21 @@ impl CodeGenerator {
                 }
                 
                 // Regular function call
-                let mut output = format!("{}(", name);
-                for (i, arg) in args.iter().enumerate() {
-                    if i > 0 {
-                        output.push_str(", ");
-                    }
-                    let arg_expr = self.generate_expression(arg);
-                    output.push_str(&arg_expr);
+                let mut arg_strs = Vec::new();
+                for arg in args {
+                    arg_strs.push(self.generate_expression(arg));
                 }
-                output.push_str(")");
-                output
+                format!("{}({})", name, arg_strs.join(", "))
+            }
+            Expression::NamedCall { name, named_args } => {
+                // Named arguments: f(a = 1, b = 2) -> f(1, 2) (positional order)
+                // For now, we'll generate them in the order provided
+                // In a real implementation, you'd match them to parameter names
+                let mut arg_strs = Vec::new();
+                for (arg_name, arg_value) in named_args {
+                    arg_strs.push(format!("/* {} = */ {}", arg_name, self.generate_expression(arg_value)));
+                }
+                format!("{}({})", name, arg_strs.join(", "))
             }
             Expression::MemberAccess { object, member } => {
                 format!("{}.{}", 
@@ -709,6 +755,20 @@ impl CodeGenerator {
                 }
                 output.push_str("}");
                 output
+            }
+            Expression::EnumLiteral(name) => {
+                // Enum literal: .VertexBuffer -> VertexBuffer (or appropriate enum value)
+                format!("{}", name)
+            }
+            Expression::UnitSuffix { value, unit } => {
+                // Unit suffix: 64.MiB -> 64 * 1024 * 1024 (or appropriate conversion)
+                let value_str = self.generate_expression(value);
+                match unit.as_str() {
+                    "MIB" => format!("({} * 1024 * 1024)", value_str),
+                    "KIB" => format!("({} * 1024)", value_str),
+                    "GIB" => format!("({} * 1024 * 1024 * 1024)", value_str),
+                    _ => format!("{} /* {} */", value_str, unit),
+                }
             }
         }
     }
@@ -769,6 +829,7 @@ impl CodeGenerator {
             Type::Vec3 => "Vec3".to_string(),
             Type::Vec4 => "Vec4".to_string(),
             Type::Mat4 => "Mat4".to_string(),
+            Type::Camera => "Camera".to_string(),
             Type::Shader(name) => name.clone(),
             Type::Query(component_types) => {
                 // Generate query type name: Query_Component1_Component2_...
@@ -1049,5 +1110,68 @@ impl CodeGenerator {
         output.push_str("};\n");
         output.push_str("\n");
         output
+    }
+    
+    fn scan_for_required_headers(&self, program: &Program, needs_vulkan: &mut bool, needs_glfw: &mut bool, needs_math: &mut bool, needs_imgui: &mut bool) {
+        // Scan all items for types that require specific headers
+        for item in &program.items {
+            match item {
+                Item::Struct(s) => {
+                    for field in &s.fields {
+                        self.check_type_for_headers(&field.ty, needs_vulkan, needs_glfw, needs_math, needs_imgui);
+                    }
+                }
+                Item::Component(c) => {
+                    for field in &c.fields {
+                        self.check_type_for_headers(&field.ty, needs_vulkan, needs_glfw, needs_math, needs_imgui);
+                    }
+                }
+                Item::Function(f) => {
+                    for param in &f.params {
+                        self.check_type_for_headers(&param.ty, needs_vulkan, needs_glfw, needs_math, needs_imgui);
+                    }
+                    self.check_type_for_headers(&f.return_type, needs_vulkan, needs_glfw, needs_math, needs_imgui);
+                }
+                Item::ExternFunction(f) => {
+                    for param in &f.params {
+                        self.check_type_for_headers(&param.ty, needs_vulkan, needs_glfw, needs_math, needs_imgui);
+                    }
+                    self.check_type_for_headers(&f.return_type, needs_vulkan, needs_glfw, needs_math, needs_imgui);
+                }
+                _ => {}
+            }
+        }
+    }
+    
+    fn check_type_for_headers(&self, ty: &Type, needs_vulkan: &mut bool, needs_glfw: &mut bool, needs_math: &mut bool, needs_imgui: &mut bool) {
+        match ty {
+            // Vulkan types (only the ones that actually exist in the AST)
+            Type::VkInstance | Type::VkDevice | Type::VkCommandBuffer | Type::VkBuffer | 
+            Type::VkImage | Type::VkImageView | Type::VkPipeline | Type::VkRenderPass | 
+            Type::VkFramebuffer | Type::VkQueue | Type::VkPhysicalDevice | Type::VkSurfaceKHR | 
+            Type::VkSwapchainKHR | Type::VkSemaphore | Type::VkFence | Type::VkCommandPool |
+            Type::VkResult => {
+                *needs_vulkan = true;
+            }
+            // GLFW types
+            Type::GLFWwindow | Type::GLFWbool => {
+                *needs_glfw = true;
+            }
+            // Math types (only the ones that actually exist in the AST)
+            Type::Vec2 | Type::Vec3 | Type::Vec4 | Type::Mat4 | Type::Camera => {
+                *needs_math = true;
+            }
+            // Array types - check inner type
+            Type::Array(inner) => {
+                self.check_type_for_headers(inner, needs_vulkan, needs_glfw, needs_math, needs_imgui);
+            }
+            // Query types - check all component types
+            Type::Query(types) => {
+                for t in types {
+                    self.check_type_for_headers(t, needs_vulkan, needs_glfw, needs_math, needs_imgui);
+                }
+            }
+            _ => {}
+        }
     }
 }

@@ -67,9 +67,16 @@ impl TypeChecker {
                 }
                 Item::ExternFunction(ext) => {
                     // Create a function def from extern for type checking
+                    // Convert ExternFunction params to FunctionDef params (with default values)
+                    let params: Vec<Param> = ext.params.iter().map(|p| Param {
+                        name: p.name.clone(),
+                        ty: p.ty.clone(),
+                        default_value: p.default_value.clone(),
+                    }).collect();
+                    
                     let func_def = FunctionDef {
                         name: ext.name.clone(),
-                        params: ext.params.clone(),
+                        params,
                         return_type: ext.return_type.clone(),
                         body: Vec::new(), // Extern functions have no body
                         attribute: None, // Extern functions don't have attributes
@@ -83,6 +90,9 @@ impl TypeChecker {
                 }
                 Item::TypeAlias(alias) => {
                     self.type_aliases.insert(alias.name.clone(), alias.clone());
+                }
+                Item::Include(_) => {
+                    // Includes are processed during parsing, no type checking needed
                 }
             }
         }
@@ -329,6 +339,19 @@ impl TypeChecker {
                             bail!("Logical operations require bool types");
                         }
                     }
+                    BinaryOp::Pipe => {
+                        // Pipe operator - type depends on right side
+                        Ok(right_type)
+                    }
+                    BinaryOp::BitwiseOr => {
+                        // Bitwise OR - works on integers
+                        if matches!(left_type, Type::I32 | Type::I64) && 
+                           matches!(right_type, Type::I32 | Type::I64) {
+                            Ok(left_type)
+                        } else {
+                            bail!("Bitwise OR requires integer types");
+                        }
+                    }
                 }
             }
             Expression::UnaryOp { op, expr } => {
@@ -543,6 +566,20 @@ impl TypeChecker {
                 // Placeholder
                 Ok(Type::Void)
             }
+            Expression::EnumLiteral(_) => {
+                // Enum literals - type depends on context
+                Ok(Type::I32) // Placeholder - should be enum type
+            }
+            Expression::UnitSuffix { value, unit: _ } => {
+                // Unit suffix doesn't change type
+                self.check_expression(value)
+            }
+            Expression::NamedCall { name, named_args: _ } => {
+                // Named arguments - same type checking as regular call
+                let func = self.functions.get(name)
+                    .ok_or_else(|| anyhow::anyhow!("Undefined function: {}", name))?;
+                Ok(func.return_type.clone())
+            }
         }
     }
     
@@ -595,6 +632,7 @@ impl TypeChecker {
             (Type::Vec3, Type::Vec3) => true,
             (Type::Vec4, Type::Vec4) => true,
             (Type::Mat4, Type::Mat4) => true,
+            (Type::Camera, Type::Camera) => true,
             (Type::FrameArena, Type::FrameArena) => true,
             _ => false,
         }

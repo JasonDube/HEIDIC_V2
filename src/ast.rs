@@ -40,6 +40,7 @@ pub enum Type {
     Vec3,
     Vec4,
     Mat4,
+    Camera,
     // Frame-scoped memory allocator
     FrameArena,
 }
@@ -60,6 +61,7 @@ pub enum Item {
     Function(FunctionDef),
     ExternFunction(ExternFunctionDef),
     TypeAlias(TypeAliasDef),
+    Include(String), // Path to included file
 }
 
 #[derive(Debug, Clone)]
@@ -151,6 +153,7 @@ pub struct ExternFunctionDef {
 pub struct Param {
     pub name: String,
     pub ty: Type,
+    pub default_value: Option<Expression>, // Default parameter value
 }
 
 #[derive(Debug, Clone)]
@@ -172,10 +175,13 @@ pub enum Expression {
     BinaryOp { op: BinaryOp, left: Box<Expression>, right: Box<Expression> },
     UnaryOp { op: UnaryOp, expr: Box<Expression> },
     Call { name: String, args: Vec<Expression> },
+    NamedCall { name: String, named_args: Vec<(String, Expression)> }, // Named arguments: f(a = 1, b = 2)
     MemberAccess { object: Box<Expression>, member: String },
     MethodCall { object: Box<Expression>, method: String, type_args: Option<Vec<Type>>, args: Vec<Expression> }, // frame.alloc_array<Vec3>(count)
     Index { array: Box<Expression>, index: Box<Expression> },
     StructLiteral { name: String, fields: Vec<(String, Expression)> },
+    EnumLiteral(String), // .VertexBuffer
+    UnitSuffix { value: Box<Expression>, unit: String }, // 64.MiB
 }
 
 #[derive(Debug, Clone)]
@@ -201,6 +207,8 @@ pub enum BinaryOp {
     Ge,
     And,
     Or,
+    Pipe, // |> operator
+    BitwiseOr, // | operator
 }
 
 #[derive(Debug, Clone)]

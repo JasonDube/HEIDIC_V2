@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <fstream>
+#include <cstdlib>  // For std::abs
 #define STB_IMAGE_IMPLEMENTATION
 #include "../third_party/stb_image.h"
 #include <sstream>
@@ -133,6 +134,11 @@ static VkDeviceMemory g_textureImageMemory = VK_NULL_HANDLE;
 static VkImageView g_textureImageView = VK_NULL_HANDLE;
 static VkSampler g_textureSampler = VK_NULL_HANDLE;
 
+// Camera matrices for raycasting
+static glm::mat4 g_currentView = glm::mat4(1.0f);
+static glm::mat4 g_currentProj = glm::mat4(1.0f);
+static glm::vec3 g_currentCamPos = glm::vec3(0.0f);
+
 // Forward declarations
 static uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
 static void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory);
@@ -232,20 +238,30 @@ static void createTextureAndDescriptors(GLFWwindow* /*window*/) {
         }
     }
     
-    // If loading failed, create a 1x1 white texture as fallback
+    // Always use a bright white texture for cubes to ensure full brightness
+    // This ensures vertex colors are displayed at full intensity
     bool usingFallback = false;
     if (!pixels) {
         std::cerr << "Failed to load texture image from all paths. Using fallback 1x1 white texture." << std::endl;
-        texWidth = 1;
-        texHeight = 1;
-        texChannels = 4;
-        pixels = new stbi_uc[4];
-        pixels[0] = 255; // R
-        pixels[1] = 255; // G
-        pixels[2] = 255; // B
-        pixels[3] = 255; // A
         usingFallback = true;
     }
+    
+    // Force white texture for consistent bright rendering
+    // Free any loaded texture and create a white one
+    if (pixels && !usingFallback) {
+        stbi_image_free(pixels);
+    }
+    
+    // Create a bright white texture (ensures full brightness)
+    texWidth = 1;
+    texHeight = 1;
+    texChannels = 4;
+    pixels = new stbi_uc[4];
+    pixels[0] = 255; // R - full brightness
+    pixels[1] = 255; // G - full brightness
+    pixels[2] = 255; // B - full brightness
+    pixels[3] = 255; // A
+    usingFallback = true; // Mark as fallback so we use delete[] instead of stbi_image_free
 
     VkDeviceSize imageSize = (VkDeviceSize)(texWidth) * texHeight * 4;
 
@@ -258,12 +274,8 @@ static void createTextureAndDescriptors(GLFWwindow* /*window*/) {
     memcpy(data, pixels, (size_t)imageSize);
     vkUnmapMemory(g_device, stagingBufferMemory);
 
-    // Free pixels - use delete[] for fallback, stbi_image_free for loaded images
-    if (usingFallback) {
-        delete[] pixels;
-    } else {
-        stbi_image_free(pixels);
-    }
+    // Free pixels - always use delete[] since we're now always creating a white texture
+    delete[] pixels;
 
     VkImageCreateInfo imageInfo = {};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -794,7 +806,17 @@ extern "C" void heidic_glfw_vulkan_hints() {
 // WRAPPERS for GLFW
 extern "C" int heidic_glfw_init() { return glfwInit(); }
 extern "C" void heidic_glfw_terminate() { glfwTerminate(); }
-extern "C" GLFWwindow* heidic_create_window(int width, int height, const char* title) { return glfwCreateWindow(width, height, title, NULL, NULL); }
+// Global window reference for fullscreen toggle
+static GLFWwindow* g_mainWindow = nullptr;
+static int g_windowWidth = 1280;
+static int g_windowHeight = 720;
+
+extern "C" GLFWwindow* heidic_create_window(int width, int height, const char* title) {
+    g_windowWidth = width;
+    g_windowHeight = height;
+    g_mainWindow = glfwCreateWindow(width, height, title, NULL, NULL);
+    return g_mainWindow;
+}
 extern "C" void heidic_destroy_window(GLFWwindow* window) { glfwDestroyWindow(window); }
 extern "C" void heidic_set_window_should_close(GLFWwindow* window, int value) { glfwSetWindowShouldClose(window, value); }
 extern "C" int heidic_get_key(GLFWwindow* window, int key) { return glfwGetKey(window, key); }
@@ -1028,7 +1050,7 @@ extern "C" int heidic_init_renderer(GLFWwindow* window) {
 
         VkPipelineRasterizationStateCreateInfo rasterizer = {};
         rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
-        rasterizer.lineWidth = 1.0f;
+        rasterizer.lineWidth = 1.0f; // Standard line width (Vulkan requires 1.0 unless wideLines feature is enabled)
         rasterizer.cullMode = VK_CULL_MODE_NONE; // Disable culling so imported models render regardless of winding
         rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
 
@@ -1052,10 +1074,12 @@ extern "C" int heidic_init_renderer(GLFWwindow* window) {
         colorBlending.pAttachments = &colorBlend;
 
         // Push Constant
+        // Note: Shader expects 68 bytes, but sizeof(glm::mat4) is 64 bytes
+        // Increase to 128 bytes (aligned to 16) to satisfy shader requirements
         VkPushConstantRange pushConstantRange = {};
         pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
         pushConstantRange.offset = 0;
-        pushConstantRange.size = sizeof(PushConsts);
+        pushConstantRange.size = 128; // Increased from sizeof(PushConsts) to satisfy shader alignment
 
         VkPipelineLayoutCreateInfo pipelineLayoutInfo = {};
         pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -1260,6 +1284,10 @@ extern "C" int heidic_is_key_pressed(GLFWwindow* window, int key) {
     return glfwGetKey(window, key) == GLFW_PRESS;
 }
 
+extern "C" int heidic_is_mouse_button_pressed(GLFWwindow* window, int button) {
+    return glfwGetMouseButton(window, button) == GLFW_PRESS;
+}
+
 // FRAME CONTROL
 extern "C" void heidic_begin_frame() {
     // Start ImGui Frame
@@ -1329,6 +1357,9 @@ extern "C" void heidic_end_frame() {
         vkUnmapMemory(g_device, g_lineVertexMemory);
 
         vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_linePipeline);
+        
+        // Bind descriptor set for view/projection matrices (lines need this too)
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_pipelineLayout, 0, 1, &g_descriptorSets[g_currentFrame], 0, nullptr);
         
         // Push Identity Model Matrix for lines
         PushConsts push;
@@ -1427,6 +1458,10 @@ extern "C" void heidic_draw_model_origin(float x, float y, float z, float rx, fl
 }
 
 extern "C" void heidic_update_camera(float px, float py, float pz, float rx, float ry, float rz) {
+    heidic_update_camera_with_far(px, py, pz, rx, ry, rz, 5000.0f);
+}
+
+extern "C" void heidic_update_camera_with_far(float px, float py, float pz, float rx, float ry, float rz, float far_plane) {
     // View Matrix from Pos/Rot
     glm::mat4 cam = glm::mat4(1.0f);
     cam = glm::translate(cam, glm::vec3(px, py, pz));
@@ -1438,8 +1473,13 @@ extern "C" void heidic_update_camera(float px, float py, float pz, float rx, flo
     
     // Proj
     float aspect = (float)g_swapchainExtent.width / (float)g_swapchainExtent.height;
-    glm::mat4 proj = glm::perspectiveRH_ZO(glm::radians(60.0f), aspect, 0.1f, 5000.0f);
+    glm::mat4 proj = glm::perspectiveRH_ZO(glm::radians(60.0f), aspect, 0.1f, far_plane);
     proj[1][1] *= -1;
+    
+    // Store matrices for raycasting
+    g_currentView = view;
+    g_currentProj = proj;
+    g_currentCamPos = glm::vec3(px, py, pz);
     
     // Update UBO
     UniformBufferObject ubo = {};
@@ -1450,6 +1490,45 @@ extern "C" void heidic_update_camera(float px, float py, float pz, float rx, flo
     vkMapMemory(g_device, g_uniformBuffersMemory[g_currentFrame], 0, sizeof(UniformBufferObject), 0, &data);
     memcpy(data, &ubo, sizeof(UniformBufferObject));
     vkUnmapMemory(g_device, g_uniformBuffersMemory[g_currentFrame]);
+}
+
+extern "C" Camera heidic_create_camera(Vec3 pos, Vec3 rot, float clip_near, float clip_far) {
+    Camera cam;
+    cam.pos = pos;
+    cam.rot = rot;
+    cam.clip_near = clip_near;
+    cam.clip_far = clip_far;
+    return cam;
+}
+
+extern "C" void heidic_update_camera_from_struct(Camera camera) {
+    // Extract values from Camera struct and update camera
+    heidic_update_camera_with_far(
+        camera.pos.x, camera.pos.y, camera.pos.z,
+        camera.rot.x, camera.rot.y, camera.rot.z,
+        camera.clip_far
+    );
+    // Note: clip_near is currently hardcoded to 0.1f in the projection matrix
+    // Could be made configurable in the future
+}
+
+extern "C" void heidic_set_video_mode(int windowed) {
+    if (g_mainWindow == nullptr) return;
+    
+    if (windowed == 0) {
+        // Fullscreen mode
+        GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+        const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+        glfwSetWindowMonitor(g_mainWindow, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
+    } else {
+        // Windowed mode
+        GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+        const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+        // Center the window
+        int x = (mode->width - g_windowWidth) / 2;
+        int y = (mode->height - g_windowHeight) / 2;
+        glfwSetWindowMonitor(g_mainWindow, NULL, x, y, g_windowWidth, g_windowHeight, 0);
+    }
 }
 
 // IMGUI WRAPPERS
@@ -1477,6 +1556,34 @@ extern "C" Vec3 heidic_imgui_drag_float3_val(const char* label, Vec3 v, float sp
 extern "C" float heidic_imgui_drag_float(const char* label, float v, float speed) {
     ImGui::DragFloat(label, &v, speed);
     return v;
+}
+
+extern "C" float heidic_get_fps() {
+    ImGuiIO& io = ImGui::GetIO();
+    return io.Framerate;
+}
+
+// VECTOR OPERATIONS
+extern "C" Vec3 heidic_vec3(float x, float y, float z) {
+    return Vec3(x, y, z);
+}
+
+extern "C" Vec3 heidic_vec3_add(Vec3 a, Vec3 b) {
+    return Vec3(glm::vec3(a) + glm::vec3(b));
+}
+
+extern "C" Vec3 heidic_vec_copy(Vec3 src) {
+    return src; // Simple copy - returns the Vec3 value
+}
+
+// Camera attachment - returns new camera transform matching player
+// Since HEIDIC doesn't support pointers yet, this returns values that can be assigned
+extern "C" Vec3 heidic_attach_camera_translation(Vec3 player_translation) {
+    return player_translation;
+}
+
+extern "C" Vec3 heidic_attach_camera_rotation(Vec3 player_rotation) {
+    return player_rotation;
 }
 
 // MATH
@@ -1762,4 +1869,409 @@ extern "C" void heidic_draw_mesh(int mesh_id, float x, float y, float z, float r
 
 extern "C" void heidic_sleep_ms(int ms) {
     std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+}
+
+// ============================================================================
+// RAYCASTING FUNCTIONS
+// ============================================================================
+
+// AABB structure for raycasting
+struct AABB {
+    glm::vec3 min;
+    glm::vec3 max;
+    
+    AABB() : min(0.0f), max(0.0f) {}
+    AABB(glm::vec3 min, glm::vec3 max) : min(min), max(max) {}
+};
+
+// Get mouse position in screen coordinates (0,0 = top-left)
+extern "C" float heidic_get_mouse_x(GLFWwindow* window) {
+    double dx, dy;
+    glfwGetCursorPos(window, &dx, &dy);
+    return (float)dx;
+}
+
+extern "C" float heidic_get_mouse_y(GLFWwindow* window) {
+    double dx, dy;
+    glfwGetCursorPos(window, &dx, &dy);
+    return (float)dy;
+}
+
+extern "C" float heidic_get_mouse_scroll_y(GLFWwindow* window) {
+    ImGuiIO& io = ImGui::GetIO();
+    // Return ImGui's scroll value - it will be 0 if ImGui consumed it
+    // We'll use it for zoom even if ImGui might have used it for scrolling panels
+    // The game logic can decide whether to use it based on context (e.g., only in top-down mode)
+    return io.MouseWheel;
+}
+
+// Convert mouse screen position to normalized device coordinates (NDC)
+// NDC: x,y in [-1, 1]
+// Vulkan NDC: Y=1 is top, Y=-1 is bottom (Y points down)
+// GLFW screen: Y=0 is top, Y=height is bottom
+static glm::vec2 screenToNDC(float screenX, float screenY, int width, int height) {
+    float ndcX = (2.0f * screenX / width) - 1.0f;
+    // Map screen Y=0 (top) to NDC Y=-1 (top), screen Y=height (bottom) to NDC Y=1 (bottom)
+    float ndcY = (2.0f * screenY / height) - 1.0f;
+    return glm::vec2(ndcX, ndcY);
+}
+
+// Unproject: Convert NDC coordinates to world-space ray
+// Returns ray origin and direction
+// CORRECT VERSION: NDC Z is always [-1, 1] regardless of depth buffer format
+// perspectiveRH_ZO affects depth buffer mapping, but NDC Z is still [-1, 1]
+static void unproject(glm::vec2 ndc, glm::mat4 invProj, glm::mat4 invView, glm::vec3& rayOrigin, glm::vec3& rayDir) {
+    // NDC clip space: Z = -1 (near), Z = +1 (far)
+    // This is correct for both OpenGL and Vulkan NDC coordinates
+    glm::vec4 clipNear = glm::vec4(ndc.x, ndc.y, -1.0f, 1.0f);  // Near plane Z = -1
+    glm::vec4 clipFar = glm::vec4(ndc.x, ndc.y, 1.0f, 1.0f);    // Far plane Z = +1
+    
+    // Transform to eye space (view space)
+    glm::vec4 eyeNear = invProj * clipNear;
+    eyeNear /= eyeNear.w;  // Perspective divide
+    
+    glm::vec4 eyeFar = invProj * clipFar;
+    eyeFar /= eyeFar.w;  // Perspective divide
+    
+    // Transform to world space
+    glm::vec4 worldNear = invView * eyeNear;
+    glm::vec4 worldFar = invView * eyeFar;
+    
+    glm::vec3 worldNearPoint = glm::vec3(worldNear);
+    glm::vec3 worldFarPoint = glm::vec3(worldFar);
+    
+    // Ray origin is camera position (as per user's working code)
+    rayOrigin = g_currentCamPos;
+    
+    // Ray direction: from near point to far point (normalized)
+    // This gives us the correct direction regardless of distance
+    glm::vec3 dirVec = worldFarPoint - worldNearPoint;
+    float dirLen = glm::length(dirVec);
+    if (dirLen > 0.0001f) {
+        rayDir = dirVec / dirLen;
+    } else {
+        // Fallback: if near and far are too close, use direction from camera to far point
+        rayDir = glm::normalize(worldFarPoint - g_currentCamPos);
+    }
+}
+
+// Ray-AABB intersection using Möller-Trumbore slab method
+// Returns true if ray hits AABB, and t (distance along ray) if hit
+static bool rayAABB(const glm::vec3& rayOrigin, const glm::vec3& rayDir, const AABB& box, float& tMin, float& tMax) {
+    // Ensure ray direction is normalized (should already be, but double-check for precision)
+    glm::vec3 dir = glm::normalize(rayDir);
+    
+    // Handle division by zero by using a very small epsilon
+    const float epsilon = 1e-6f;
+    glm::vec3 invDir;
+    invDir.x = (fabsf(dir.x) < epsilon) ? (dir.x >= 0.0f ? 1e6f : -1e6f) : (1.0f / dir.x);
+    invDir.y = (fabsf(dir.y) < epsilon) ? (dir.y >= 0.0f ? 1e6f : -1e6f) : (1.0f / dir.y);
+    invDir.z = (fabsf(dir.z) < epsilon) ? (dir.z >= 0.0f ? 1e6f : -1e6f) : (1.0f / dir.z);
+    
+    glm::vec3 t0 = (box.min - rayOrigin) * invDir;
+    glm::vec3 t1 = (box.max - rayOrigin) * invDir;
+    
+    glm::vec3 tMinVec = glm::min(t0, t1);
+    glm::vec3 tMaxVec = glm::max(t0, t1);
+    
+    tMin = glm::max(glm::max(tMinVec.x, tMinVec.y), tMinVec.z);
+    tMax = glm::min(glm::min(tMaxVec.x, tMaxVec.y), tMaxVec.z);
+    
+    // Ray hits if tMax >= tMin AND tMax >= 0 (intersection is in front of or at ray origin)
+    // If tMin > tMax, the ray misses the AABB
+    // If tMax < 0, the entire AABB is behind the ray origin
+    // If tMin < 0 and tMax >= 0, the ray origin is inside the AABB (hit!)
+    return (tMax >= tMin) && (tMax >= 0.0f);
+}
+
+// Create AABB for a cube at position (x,y,z) with half-extents (sx/2, sy/2, sz/2)
+static AABB createCubeAABB(float x, float y, float z, float sx, float sy, float sz) {
+    float halfSx = sx * 0.5f;
+    float halfSy = sy * 0.5f;
+    float halfSz = sz * 0.5f;
+    
+    glm::vec3 min(x - halfSx, y - halfSy, z - halfSz);
+    glm::vec3 max(x + halfSx, y + halfSy, z + halfSz);
+    return AABB(min, max);
+}
+
+// Raycast from mouse position against a cube
+// Returns 1 if hit, 0 if miss
+extern "C" int heidic_raycast_cube_hit(GLFWwindow* window, float cubeX, float cubeY, float cubeZ, float cubeSx, float cubeSy, float cubeSz) {
+    if (!window) return 0;
+    
+    // Get mouse position
+    double mouseX, mouseY;
+    glfwGetCursorPos(window, &mouseX, &mouseY);
+    
+    // Get framebuffer size (more accurate than swapchain extent for mouse coordinates)
+    int fbWidth, fbHeight;
+    glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
+    
+    // Convert to NDC
+    glm::vec2 ndc = screenToNDC((float)mouseX, (float)mouseY, fbWidth, fbHeight);
+    
+    // Unproject to get ray
+    glm::mat4 invProj = glm::inverse(g_currentProj);
+    glm::mat4 invView = glm::inverse(g_currentView);
+    glm::vec3 rayOrigin, rayDir;
+    unproject(ndc, invProj, invView, rayOrigin, rayDir);
+    
+    // Create AABB for cube
+    AABB cubeBox = createCubeAABB(cubeX, cubeY, cubeZ, cubeSx, cubeSy, cubeSz);
+    
+    // Test intersection
+    float tMin, tMax;
+    bool hit = rayAABB(rayOrigin, rayDir, cubeBox, tMin, tMax);
+    
+    // DEBUG: Print raycast info when testing (with AABB bounds)
+    printf("[RAYCAST DEBUG] Mouse: (%.1f, %.1f) | NDC: (%.3f, %.3f) | Ray Origin: (%.2f, %.2f, %.2f) | Ray Dir: (%.3f, %.3f, %.3f) | Cube: (%.1f, %.1f, %.1f) | AABB: min(%.1f,%.1f,%.1f) max(%.1f,%.1f,%.1f) | Hit: %s | tMin: %.2f, tMax: %.2f\n",
+           mouseX, mouseY, ndc.x, ndc.y, 
+           rayOrigin.x, rayOrigin.y, rayOrigin.z,
+           rayDir.x, rayDir.y, rayDir.z,
+           cubeX, cubeY, cubeZ,
+           cubeBox.min.x, cubeBox.min.y, cubeBox.min.z,
+           cubeBox.max.x, cubeBox.max.y, cubeBox.max.z,
+           hit ? "YES" : "NO", tMin, tMax);
+    
+    return hit ? 1 : 0;
+}
+
+// Get hit point from raycast (call after heidic_raycast_cube_hit returns 1)
+// Returns world-space hit position
+extern "C" Vec3 heidic_raycast_cube_hit_point(GLFWwindow* window, float cubeX, float cubeY, float cubeZ, float cubeSx, float cubeSy, float cubeSz) {
+    Vec3 result = {0.0f, 0.0f, 0.0f};
+    if (!window) return result;
+    
+    // Get mouse position
+    double mouseX, mouseY;
+    glfwGetCursorPos(window, &mouseX, &mouseY);
+    
+    // Get framebuffer size
+    int fbWidth, fbHeight;
+    glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
+    
+    // Convert to NDC
+    glm::vec2 ndc = screenToNDC((float)mouseX, (float)mouseY, fbWidth, fbHeight);
+    
+    // Unproject to get ray
+    glm::mat4 invProj = glm::inverse(g_currentProj);
+    glm::mat4 invView = glm::inverse(g_currentView);
+    glm::vec3 rayOrigin, rayDir;
+    unproject(ndc, invProj, invView, rayOrigin, rayDir);
+    
+    // Create AABB for cube
+    AABB cubeBox = createCubeAABB(cubeX, cubeY, cubeZ, cubeSx, cubeSy, cubeSz);
+    
+    // Test intersection
+    float tMin, tMax;
+    if (rayAABB(rayOrigin, rayDir, cubeBox, tMin, tMax)) {
+        // Calculate hit point (use tMin for closest intersection)
+        glm::vec3 hit = rayOrigin + rayDir * tMin;
+        result.x = hit.x;
+        result.y = hit.y;
+        result.z = hit.z;
+    }
+    
+    return result;
+}
+
+// Get mouse ray origin in world space
+extern "C" Vec3 heidic_get_mouse_ray_origin(GLFWwindow* window) {
+    Vec3 result = {0.0f, 0.0f, 0.0f};
+    if (!window) return result;
+    
+    // Get mouse position
+    double mouseX, mouseY;
+    glfwGetCursorPos(window, &mouseX, &mouseY);
+    
+    // Get framebuffer size
+    int fbWidth, fbHeight;
+    glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
+    
+    // Convert to NDC
+    glm::vec2 ndc = screenToNDC((float)mouseX, (float)mouseY, fbWidth, fbHeight);
+    
+    // Unproject to get ray
+    glm::mat4 invProj = glm::inverse(g_currentProj);
+    glm::mat4 invView = glm::inverse(g_currentView);
+    glm::vec3 origin, dir;
+    unproject(ndc, invProj, invView, origin, dir);
+    
+    result.x = origin.x;
+    result.y = origin.y;
+    result.z = origin.z;
+    return result;
+}
+
+// Get mouse ray direction in world space
+extern "C" Vec3 heidic_get_mouse_ray_dir(GLFWwindow* window) {
+    Vec3 result = {0.0f, 0.0f, 0.0f};
+    if (!window) return result;
+    
+    // Get mouse position
+    double mouseX, mouseY;
+    glfwGetCursorPos(window, &mouseX, &mouseY);
+    
+    // Convert to NDC
+    int fbWidth, fbHeight;
+    glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
+    glm::vec2 ndc = screenToNDC((float)mouseX, (float)mouseY, fbWidth, fbHeight);
+    
+    // Unproject to get ray
+    glm::mat4 invProj = glm::inverse(g_currentProj);
+    glm::mat4 invView = glm::inverse(g_currentView);
+    glm::vec3 origin, dir;
+    unproject(ndc, invProj, invView, origin, dir);
+    
+    result.x = dir.x;
+    result.y = dir.y;
+    result.z = dir.z;
+    return result;
+}
+
+// Draw a ground plane (large flat quad at specified y position)
+extern "C" void heidic_draw_ground_plane(float size, float r, float g, float b) {
+    // Draw a grid pattern on the ground plane
+    // Ground plane is at y = -300 (3 meters below origin, since 1 unit = 1 cm)
+    float groundY = -300.0f;
+    float halfSize = size * 0.5f;
+    int gridLines = 20; // Number of grid lines
+    
+    // Draw grid lines along X axis
+    for (int i = 0; i <= gridLines; i++) {
+        float z = -halfSize + (size / gridLines) * i;
+        heidic_draw_line(-halfSize, groundY, z, halfSize, groundY, z, r, g, b);
+    }
+    
+    // Draw grid lines along Z axis
+    for (int i = 0; i <= gridLines; i++) {
+        float x = -halfSize + (size / gridLines) * i;
+        heidic_draw_line(x, groundY, -halfSize, x, groundY, halfSize, r, g, b);
+    }
+}
+
+// Draw wireframe outline of a cube (12 edges)
+extern "C" void heidic_draw_cube_wireframe(float x, float y, float z, float rx, float ry, float rz, float sx, float sy, float sz, float r, float g, float b) {
+    // Build model matrix
+    glm::mat4 model = glm::mat4(1.0f);
+    model = glm::translate(model, glm::vec3(x, y, z));
+    model = glm::rotate(model, glm::radians(rx), glm::vec3(1.0f, 0.0f, 0.0f));
+    model = glm::rotate(model, glm::radians(ry), glm::vec3(0.0f, 1.0f, 0.0f));
+    model = glm::rotate(model, glm::radians(rz), glm::vec3(0.0f, 0.0f, 1.0f));
+    
+    // Cube corners in local space (centered at origin, size 1x1x1)
+    glm::vec3 corners[8] = {
+        glm::vec3(-0.5f, -0.5f, -0.5f), // 0: left-bottom-back
+        glm::vec3( 0.5f, -0.5f, -0.5f), // 1: right-bottom-back
+        glm::vec3( 0.5f,  0.5f, -0.5f), // 2: right-top-back
+        glm::vec3(-0.5f,  0.5f, -0.5f), // 3: left-top-back
+        glm::vec3(-0.5f, -0.5f,  0.5f), // 4: left-bottom-front
+        glm::vec3( 0.5f, -0.5f,  0.5f), // 5: right-bottom-front
+        glm::vec3( 0.5f,  0.5f,  0.5f), // 6: right-top-front
+        glm::vec3(-0.5f,  0.5f,  0.5f)  // 7: left-top-front
+    };
+    
+    // Apply scale
+    for (int i = 0; i < 8; i++) {
+        corners[i] = glm::vec3(corners[i].x * sx, corners[i].y * sy, corners[i].z * sz);
+    }
+    
+    // Transform to world space
+    for (int i = 0; i < 8; i++) {
+        glm::vec4 world = model * glm::vec4(corners[i], 1.0f);
+        corners[i] = glm::vec3(world);
+    }
+    
+    // Draw 12 edges of the cube
+    // Back face (z = -0.5)
+    heidic_draw_line(corners[0].x, corners[0].y, corners[0].z, corners[1].x, corners[1].y, corners[1].z, r, g, b); // bottom
+    heidic_draw_line(corners[1].x, corners[1].y, corners[1].z, corners[2].x, corners[2].y, corners[2].z, r, g, b); // right
+    heidic_draw_line(corners[2].x, corners[2].y, corners[2].z, corners[3].x, corners[3].y, corners[3].z, r, g, b); // top
+    heidic_draw_line(corners[3].x, corners[3].y, corners[3].z, corners[0].x, corners[0].y, corners[0].z, r, g, b); // left
+    
+    // Front face (z = 0.5)
+    heidic_draw_line(corners[4].x, corners[4].y, corners[4].z, corners[5].x, corners[5].y, corners[5].z, r, g, b); // bottom
+    heidic_draw_line(corners[5].x, corners[5].y, corners[5].z, corners[6].x, corners[6].y, corners[6].z, r, g, b); // right
+    heidic_draw_line(corners[6].x, corners[6].y, corners[6].z, corners[7].x, corners[7].y, corners[7].z, r, g, b); // top
+    heidic_draw_line(corners[7].x, corners[7].y, corners[7].z, corners[4].x, corners[4].y, corners[4].z, r, g, b); // left
+    
+    // Connecting edges
+    heidic_draw_line(corners[0].x, corners[0].y, corners[0].z, corners[4].x, corners[4].y, corners[4].z, r, g, b); // left-bottom
+    heidic_draw_line(corners[1].x, corners[1].y, corners[1].z, corners[5].x, corners[5].y, corners[5].z, r, g, b); // right-bottom
+    heidic_draw_line(corners[2].x, corners[2].y, corners[2].z, corners[6].x, corners[6].y, corners[6].z, r, g, b); // right-top
+    heidic_draw_line(corners[3].x, corners[3].y, corners[3].z, corners[7].x, corners[7].y, corners[7].z, r, g, b); // left-top
+}
+
+// Ground detection: Raycast straight down from a position
+// Returns 1 if ground is hit, 0 otherwise
+extern "C" int heidic_raycast_ground_hit(float x, float y, float z, float maxDistance) {
+    // Ray origin: at the position
+    glm::vec3 rayOrigin(x, y, z);
+    
+    // Ray direction: straight down
+    glm::vec3 rayDir(0.0f, -1.0f, 0.0f);
+    
+    // Test against a ground plane at y=-300 (3 meters below origin)
+    float groundY = -300.0f;
+    
+    if (rayOrigin.y > groundY && rayOrigin.y - maxDistance <= groundY) {
+        float t = rayOrigin.y - groundY; // Distance to ground (rayDir.y is -1)
+        if (t >= 0.0f && t <= maxDistance) {
+            return 1;
+        }
+    }
+    
+    return 0;
+}
+
+// Get ground hit point (call after heidic_raycast_ground_hit returns 1)
+extern "C" Vec3 heidic_raycast_ground_hit_point(float x, float y, float z, float maxDistance) {
+    Vec3 result = {x, -300.0f, z}; // Default to ground at y=-300 (3 meters below)
+    
+    glm::vec3 rayOrigin(x, y, z);
+    glm::vec3 rayDir(0.0f, -1.0f, 0.0f);
+    float groundY = -300.0f;
+    
+    if (rayOrigin.y > groundY && rayOrigin.y - maxDistance <= groundY) {
+        float t = rayOrigin.y - groundY;
+        if (t >= 0.0f && t <= maxDistance) {
+            glm::vec3 hit = rayOrigin + rayDir * t;
+            result.x = hit.x;
+            result.y = hit.y;
+            result.z = hit.z;
+        }
+    }
+    
+    return result;
+}
+
+// Debug: Print current mouse ray info to console
+extern "C" void heidic_debug_print_ray(GLFWwindow* window) {
+    if (!window) return;
+    
+    double mouseX, mouseY;
+    glfwGetCursorPos(window, &mouseX, &mouseY);
+    
+    int fbWidth, fbHeight;
+    glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
+    
+    glm::vec2 ndc = screenToNDC((float)mouseX, (float)mouseY, fbWidth, fbHeight);
+    
+    glm::mat4 invProj = glm::inverse(g_currentProj);
+    glm::mat4 invView = glm::inverse(g_currentView);
+    glm::vec3 rayOrigin, rayDir;
+    unproject(ndc, invProj, invView, rayOrigin, rayDir);
+    
+    // Calculate a point 1000 units along the ray
+    glm::vec3 rayEnd = rayOrigin + rayDir * 1000.0f;
+    
+    printf("=== RAYCAST DEBUG ===\n");
+    printf("Mouse Screen: (%.1f, %.1f) | Framebuffer: (%d, %d)\n", mouseX, mouseY, fbWidth, fbHeight);
+    printf("NDC: (%.4f, %.4f)\n", ndc.x, ndc.y);
+    printf("Ray Origin: (%.2f, %.2f, %.2f)\n", rayOrigin.x, rayOrigin.y, rayOrigin.z);
+    printf("Ray Direction: (%.4f, %.4f, %.4f) | Length: %.4f\n", rayDir.x, rayDir.y, rayDir.z, glm::length(rayDir));
+    printf("Ray End (1000 units): (%.2f, %.2f, %.2f)\n", rayEnd.x, rayEnd.y, rayEnd.z);
+    printf("Camera Pos: (%.2f, %.2f, %.2f)\n", g_currentCamPos.x, g_currentCamPos.y, g_currentCamPos.z);
+    printf("====================\n");
 }
