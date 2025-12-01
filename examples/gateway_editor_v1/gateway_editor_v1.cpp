@@ -164,6 +164,39 @@ extern "C" {
     float heidic_imgui_drag_float(const char* label, float v, float speed);
 }
 extern "C" {
+    int32_t heidic_imgui_begin_main_menu_bar();
+}
+extern "C" {
+    void heidic_imgui_end_main_menu_bar();
+}
+extern "C" {
+    int32_t heidic_imgui_begin_menu(const char* label);
+}
+extern "C" {
+    void heidic_imgui_end_menu();
+}
+extern "C" {
+    int32_t heidic_imgui_menu_item(const char* label);
+}
+extern "C" {
+    void heidic_imgui_separator();
+}
+extern "C" {
+    int32_t heidic_imgui_button(const char* label);
+}
+extern "C" {
+    int32_t heidic_save_level_str_wrapper(const char* filepath);
+}
+extern "C" {
+    int32_t heidic_load_level_str_wrapper(const char* filepath);
+}
+extern "C" {
+    int32_t heidic_show_save_dialog();
+}
+extern "C" {
+    int32_t heidic_show_open_dialog();
+}
+extern "C" {
     float heidic_get_fps();
 }
 extern "C" {
@@ -204,6 +237,15 @@ extern "C" {
 }
 extern "C" {
     float heidic_get_mouse_scroll_y(GLFWwindow* window);
+}
+extern "C" {
+    float heidic_get_mouse_delta_x(GLFWwindow* window);
+}
+extern "C" {
+    float heidic_get_mouse_delta_y(GLFWwindow* window);
+}
+extern "C" {
+    void heidic_set_cursor_mode(GLFWwindow* window, int32_t mode);
 }
 extern "C" {
     Vec3 heidic_get_mouse_ray_origin(GLFWwindow* window);
@@ -315,10 +357,14 @@ int heidic_main() {
         float cube_sz = 100;
         float move_speed = 5;
         float rot_speed = 2;
+        float mouse_sensitivity = 0.1;
+        float pitch_max = 90;
+        float pitch_min = -90;
         int32_t show_debug = 1;
         int32_t f1_was_pressed = 0;
         int32_t camera_mode = 1;
         int32_t c_was_pressed = 0;
+        heidic_set_cursor_mode(window, 2);
         int32_t show_grid = 1;
         int32_t g_was_pressed = 0;
         int32_t video_mode = 1;
@@ -333,7 +379,10 @@ int heidic_main() {
         float selected_cube_index = -1;
         int32_t is_grounded = 0;
         int32_t mouse_left_was_pressed = 0;
+        int32_t mouse_middle_was_pressed = 0;
         float topdown_cam_height = 10000;
+        float topdown_cam_pan_x = 0;
+        float topdown_cam_pan_z = 0;
         Vec3 topdown_cam_pos = heidic_vec3(0, topdown_cam_height, 0);
         Vec3 topdown_cam_rot = heidic_vec3(-90, 0, 0);
         float ref1_x = -2000;
@@ -365,13 +414,28 @@ int heidic_main() {
                 if ((c_was_pressed == 0)) {
                     if ((camera_mode == 0)) {
                         camera_mode = 1;
+                        heidic_set_cursor_mode(window, 2);
                     } else {
                         camera_mode = 0;
+                        heidic_set_cursor_mode(window, 0);
                     }
                     c_was_pressed = 1;
                 }
             } else {
                 c_was_pressed = 0;
+            }
+            if ((camera_mode == 1)) {
+                float mouse_delta_x = heidic_get_mouse_delta_x(window);
+                float mouse_delta_y = heidic_get_mouse_delta_y(window);
+                player_rot.y = (player_rot.y - (mouse_delta_x * mouse_sensitivity));
+                player_rot.x = (player_rot.x - (mouse_delta_y * mouse_sensitivity));
+                if ((player_rot.x > pitch_max)) {
+                    player_rot.x = pitch_max;
+                }
+                float pitch_check = (pitch_min - player_rot.x);
+                if ((pitch_check > 0)) {
+                    player_rot.x = pitch_min;
+                }
             }
             int32_t g_is_pressed = heidic_is_key_pressed(window, 71);
             if ((g_is_pressed == 1)) {
@@ -471,18 +535,59 @@ int heidic_main() {
                 camera_pos = heidic_attach_camera_translation(offset_pos);
                 camera_rot = heidic_attach_camera_rotation(player_rot);
             } else {
-                float scroll_delta = heidic_get_mouse_scroll_y(window);
-                if ((scroll_delta != 0)) {
-                    float zoom_speed = 500;
-                    topdown_cam_height = (topdown_cam_height - (scroll_delta * zoom_speed));
+                int32_t left_ctrl_pressed = heidic_is_key_pressed(window, 341);
+                int32_t right_ctrl_pressed = heidic_is_key_pressed(window, 345);
+                int32_t ctrl_pressed = 0;
+                if ((left_ctrl_pressed == 1)) {
+                    ctrl_pressed = 1;
+                }
+                if ((right_ctrl_pressed == 1)) {
+                    ctrl_pressed = 1;
+                }
+                int32_t right_mouse_pressed = heidic_is_mouse_button_pressed(window, 1);
+                if (((ctrl_pressed == 1) && (right_mouse_pressed == 1))) {
+                    float mouse_delta_y = heidic_get_mouse_delta_y(window);
+                    if ((mouse_delta_y != 0)) {
+                        float zoom_speed_factor = (topdown_cam_height / 10000);
+                        float zoom_speed = (50 * zoom_speed_factor);
+                        topdown_cam_height = (topdown_cam_height - (mouse_delta_y * zoom_speed));
+                        if ((topdown_cam_height < 1000)) {
+                            topdown_cam_height = 1000;
+                        }
+                        if ((topdown_cam_height > 50000)) {
+                            topdown_cam_height = 50000;
+                        }
+                    }
+                }
+                if ((heidic_is_key_pressed(window, 91) == 1)) {
+                    float zoom_speed = 100;
+                    topdown_cam_height = (topdown_cam_height - zoom_speed);
                     if ((topdown_cam_height < 1000)) {
                         topdown_cam_height = 1000;
                     }
+                }
+                if ((heidic_is_key_pressed(window, 93) == 1)) {
+                    float zoom_speed = 100;
+                    topdown_cam_height = (topdown_cam_height + zoom_speed);
                     if ((topdown_cam_height > 50000)) {
                         topdown_cam_height = 50000;
                     }
                 }
-                topdown_cam_pos = heidic_vec3(0, topdown_cam_height, 0);
+                int32_t mouse_middle_pressed = heidic_is_mouse_button_pressed(window, 2);
+                if ((mouse_middle_pressed == 1)) {
+                    float mouse_delta_x = heidic_get_mouse_delta_x(window);
+                    float mouse_delta_y = heidic_get_mouse_delta_y(window);
+                    if (((mouse_delta_x != 0) || (mouse_delta_y != 0))) {
+                        float pan_speed_factor = (topdown_cam_height / 10000);
+                        float pan_speed = (4 * pan_speed_factor);
+                        topdown_cam_pan_x = (topdown_cam_pan_x - (mouse_delta_x * pan_speed));
+                        topdown_cam_pan_z = (topdown_cam_pan_z - (mouse_delta_y * pan_speed));
+                    }
+                    mouse_middle_was_pressed = 1;
+                } else {
+                    mouse_middle_was_pressed = 0;
+                }
+                topdown_cam_pos = heidic_vec3(topdown_cam_pan_x, topdown_cam_height, topdown_cam_pan_z);
                 camera_pos = topdown_cam_pos;
                 camera_rot = topdown_cam_rot;
             }
@@ -493,6 +598,41 @@ int heidic_main() {
             cube_ry = player_rot.y;
             cube_rz = player_rot.z;
             heidic_begin_frame();
+            if ((heidic_imgui_begin_main_menu_bar() == 1)) {
+                if ((heidic_imgui_begin_menu("File") == 1)) {
+                    if ((heidic_imgui_menu_item("Save Level As...") == 1)) {
+                        int32_t save_result = heidic_show_save_dialog();
+                        if ((save_result == 1)) {
+                        }
+                    }
+                    if ((heidic_imgui_menu_item("Open Level...") == 1)) {
+                        int32_t load_result = heidic_show_open_dialog();
+                        if ((load_result == 1)) {
+                        }
+                    }
+                    heidic_imgui_separator();
+                    if ((heidic_imgui_menu_item("Exit") == 1)) {
+                        heidic_set_window_should_close(window, 1);
+                    }
+                    heidic_imgui_end_menu();
+                }
+                if ((heidic_imgui_begin_menu("Object") == 1)) {
+                    if ((heidic_imgui_menu_item("Add Cube") == 1)) {
+                        float default_cube_size = 200;
+                        int32_t new_cube_index = heidic_create_cube(0, 0, 0, default_cube_size, default_cube_size, default_cube_size);
+                        selected_cube_index = (heidic_int_to_float(new_cube_index) + 2);
+                        has_selection = 1;
+                        selected_cube_x = 0;
+                        selected_cube_y = 0;
+                        selected_cube_z = 0;
+                        selected_cube_sx = default_cube_size;
+                        selected_cube_sy = default_cube_size;
+                        selected_cube_sz = default_cube_size;
+                    }
+                    heidic_imgui_end_menu();
+                }
+                heidic_imgui_end_main_menu_bar();
+            }
             if ((camera_mode == 0)) {
                 heidic_update_camera_with_far(camera_pos.x, camera_pos.y, camera_pos.z, camera_rot.x, camera_rot.y, camera_rot.z, 50000);
             } else {

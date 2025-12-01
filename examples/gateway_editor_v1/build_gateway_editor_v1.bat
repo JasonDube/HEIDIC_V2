@@ -149,6 +149,16 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM Compile nfd_win.cpp (Native File Dialog)
+if exist "%PROJECT_ROOT%\third_party\nfd_win.cpp" (
+    echo Compiling nfd_win.cpp...
+    g++ -std=c++17 -O3 %INCLUDES% -c "%PROJECT_ROOT%\third_party\nfd_win.cpp" -o "%PROJECT_ROOT%\vulkan\obj\nfd_win.o"
+    if errorlevel 1 (
+        echo Failed to compile nfd_win.cpp!
+        exit /b 1
+    )
+)
+
 REM Compile ImGui files if they exist
 if exist "%PROJECT_ROOT%\third_party\imgui\imgui.h" (
     echo Compiling ImGui files...
@@ -173,6 +183,9 @@ echo Linking executable...
 echo [DEBUG] PROJECT_ROOT=%PROJECT_ROOT%
 echo [DEBUG] Setting OBJ_FILES...
 set "OBJ_FILES=%PROJECT_ROOT%\vulkan\obj\gateway_editor_v1.o %PROJECT_ROOT%\vulkan\obj\eden_vulkan_helpers.o"
+if exist "%PROJECT_ROOT%\vulkan\obj\nfd_win.o" (
+    set "OBJ_FILES=%OBJ_FILES% %PROJECT_ROOT%\vulkan\obj\nfd_win.o"
+)
 echo [DEBUG] OBJ_FILES=%OBJ_FILES%
 echo [DEBUG] Checking for ImGui objects...
 if exist "%PROJECT_ROOT%\vulkan\obj\imgui.o" (
@@ -205,7 +218,7 @@ if !ERRORLEVEL!==0 (
         REM Fall back to trying -lglfw3 (might be in system library path)
         echo Warning: GLFW library not found in standard locations.
         echo Attempting to link with -lglfw3 (may fail if GLFW not installed)...
-        set "LIBS=-lglfw3 -lgdi32 -luser32 -lshell32"
+        set "LIBS=-lglfw3 -lgdi32 -luser32 -lshell32 -lole32 -luuid"
     )
 ) else (
     REM No pkg-config, try -lglfw3 anyway (might work if in system path)
@@ -258,7 +271,7 @@ if "!GLFW_FOUND!"=="1" (
     REM Convert GLFW path to forward slashes for g++
     set "GLFW_LIB_PATH_FORWARD=!GLFW_LIB_PATH:\=/!"
     echo [DEBUG] GLFW_LIB_PATH_FORWARD=!GLFW_LIB_PATH_FORWARD!
-    set "LINK_CMD=!LINK_CMD! -L!GLFW_LIB_PATH_FORWARD! -lglfw3 -lgdi32 -luser32 -lshell32"
+    set "LINK_CMD=!LINK_CMD! -L!GLFW_LIB_PATH_FORWARD! -lglfw3 -lgdi32 -luser32 -lshell32 -lole32 -luuid"
 ) else (
     echo [DEBUG] GLFW not found - using fallback: !LIBS!
     if defined LIBS (

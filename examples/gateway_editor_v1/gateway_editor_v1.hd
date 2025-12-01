@@ -47,8 +47,15 @@ fn main(): void {
     // Movement Speed (cm per frame)
     let move_speed: f32 = 5.0;
     
-    // Rotation Speed (degrees per frame)
+    // Rotation Speed (degrees per frame) - for Q/E keys (optional, mouse look is primary)
     let rot_speed: f32 = 2.0;
+    
+    // Mouse Look Sensitivity (degrees per pixel)
+    let mouse_sensitivity: f32 = 0.1;
+    
+    // Pitch clamp limits (for camera rotation)
+    let pitch_max: f32 = 90.0;
+    let pitch_min: f32 = -90.0;
     
     // Debug UI State
     let show_debug: i32 = 1;
@@ -57,6 +64,9 @@ fn main(): void {
     // Camera Mode: 0 = Top-Down, 1 = FPS
     let camera_mode: i32 = 1; // Start in FPS mode
     let c_was_pressed: i32 = 0;
+    
+    // Capture cursor on startup if in FPS mode
+    heidic_set_cursor_mode(window, 2); // 2 = disabled (captured)
     
     // Grid visibility toggle
     let show_grid: i32 = 1; // Start with grid visible
@@ -81,9 +91,15 @@ fn main(): void {
     
     // Mouse button state tracking
     let mouse_left_was_pressed: i32 = 0;
+    let mouse_middle_was_pressed: i32 = 0;
+    
+    // Level name buffer for input (managed by C++ side)
+    // We'll use heidic_get_level_name() to get the current name
     
     // Top-down camera position (high up, looking down)
     let topdown_cam_height: f32 = 10000.0; // 100 meters up (zoom level)
+    let topdown_cam_pan_x: f32 = 0.0; // Pan offset X
+    let topdown_cam_pan_z: f32 = 0.0; // Pan offset Z
     let topdown_cam_pos: Vec3 = heidic_vec3(0.0, topdown_cam_height, 0.0); // 100 meters up
     let topdown_cam_rot: Vec3 = heidic_vec3(-90.0, 0.0, 0.0); // Looking straight down
     
@@ -130,13 +146,42 @@ fn main(): void {
             if c_was_pressed == 0 {
                 if camera_mode == 0 {
                     camera_mode = 1; // Switch to FPS
+                    // Capture cursor when entering FPS mode
+                    heidic_set_cursor_mode(window, 2); // 2 = disabled (captured)
                 } else {
                     camera_mode = 0; // Switch to Top-Down
+                    // Release cursor when entering top-down mode
+                    heidic_set_cursor_mode(window, 0); // 0 = normal
                 }
                 c_was_pressed = 1;
             }
         } else {
             c_was_pressed = 0;
+        }
+        
+        // Mouse Look (only in FPS mode)
+        if camera_mode == 1 {
+            // Get mouse delta
+            let mouse_delta_x: f32 = heidic_get_mouse_delta_x(window);
+            let mouse_delta_y: f32 = heidic_get_mouse_delta_y(window);
+            
+            // Update yaw (horizontal rotation) - rotate around Y axis
+            // Reversed: mouse right = turn right (natural FPS feel)
+            player_rot.y = player_rot.y - mouse_delta_x * mouse_sensitivity;
+            
+            // Update pitch (vertical rotation) - rotate around X axis
+            // Clamp pitch to prevent flipping (typically -90 to +90 degrees)
+            player_rot.x = player_rot.x - mouse_delta_y * mouse_sensitivity;
+            
+            // Clamp pitch to prevent camera flipping
+            if player_rot.x > pitch_max {
+                player_rot.x = pitch_max;
+            }
+            // Clamp minimum pitch (check if pitch_min is greater than current - inverted logic)
+            let pitch_check: f32 = pitch_min - player_rot.x;
+            if pitch_check > 0.0 {
+                player_rot.x = pitch_min;
+            }
         }
         
         // G Key Toggle Logic (71 is G) - Toggle ground plane grid visibility
@@ -261,11 +306,12 @@ fn main(): void {
             player_pos.z = player_pos.z + right_z * move_speed;
         }
         
-        // Q = 81: rotate Y up (increase rotation)
+        // Q = 81: rotate Y up (increase rotation) - Optional, mouse look is primary
+        // Keep Q/E for fine-tuning if needed, but mouse look is the main control
         if heidic_is_key_pressed(window, 81) == 1 {
             player_rot.y = player_rot.y + rot_speed;
         }
-        // E = 69: rotate Y down (decrease rotation)
+        // E = 69: rotate Y down (decrease rotation) - Optional, mouse look is primary
         if heidic_is_key_pressed(window, 69) == 1 {
             player_rot.y = player_rot.y - rot_speed;
         }
@@ -282,27 +328,89 @@ fn main(): void {
             // Copy player rotation to camera rotation
             camera_rot = heidic_attach_camera_rotation(player_rot);
         } else {
-            // Top-Down Mode: Use fixed top-down camera with zoom
-            // Handle mouse scroll for zoom (only in top-down mode)
-            let scroll_delta: f32 = heidic_get_mouse_scroll_y(window);
-            if scroll_delta != 0.0 {
-                // Zoom in/out by adjusting camera height
-                // Scroll up (positive) = zoom in (lower height)
-                // Scroll down (negative) = zoom out (higher height)
-                let zoom_speed: f32 = 500.0; // 5 meters per scroll step
-                topdown_cam_height = topdown_cam_height - scroll_delta * zoom_speed;
+            // Top-Down Mode: Use fixed top-down camera with zoom and pan
+            // Ctrl+RMB drag for zoom (ZBrush style)
+            // Left Ctrl = 341, Right Ctrl = 345, Right Mouse Button = 1
+            let left_ctrl_pressed: i32 = heidic_is_key_pressed(window, 341);
+            let right_ctrl_pressed: i32 = heidic_is_key_pressed(window, 345);
+            let ctrl_pressed: i32 = 0;
+            if left_ctrl_pressed == 1 {
+                ctrl_pressed = 1;
+            }
+            if right_ctrl_pressed == 1 {
+                ctrl_pressed = 1;
+            }
+            
+            let right_mouse_pressed: i32 = heidic_is_mouse_button_pressed(window, 1);
+            
+            if ctrl_pressed == 1 && right_mouse_pressed == 1 {
+                // Get mouse delta Y for zoom
+                let mouse_delta_y: f32 = heidic_get_mouse_delta_y(window);
+                if mouse_delta_y != 0.0 {
+                    // Drag up = zoom in (lower height), drag down = zoom out (higher height)
+                    // Speed proportional to camera height for consistent feel
+                    let zoom_speed_factor: f32 = topdown_cam_height / 10000.0; // Normalize to base height
+                    let zoom_speed: f32 = 50.0 * zoom_speed_factor; // Base speed multiplier
+                    topdown_cam_height = topdown_cam_height - mouse_delta_y * zoom_speed;
+                    
+                    // Clamp zoom level (min 1000 units = 10 meters, max 50000 units = 500 meters)
+                    if topdown_cam_height < 1000.0 {
+                        topdown_cam_height = 1000.0;
+                    }
+                    if topdown_cam_height > 50000.0 {
+                        topdown_cam_height = 50000.0;
+                    }
+                }
+            }
+            
+            // [ and ] keys for zoom (backup/alternative)
+            // [ = zoom in (lower height), ] = zoom out (higher height)
+            if heidic_is_key_pressed(window, 91) == 1 {
+                // Zoom in
+                let zoom_speed: f32 = 100.0; // Reduced speed for finer control
+                topdown_cam_height = topdown_cam_height - zoom_speed;
                 
                 // Clamp zoom level (min 1000 units = 10 meters, max 50000 units = 500 meters)
                 if topdown_cam_height < 1000.0 {
                     topdown_cam_height = 1000.0;
                 }
+            }
+            if heidic_is_key_pressed(window, 93) == 1 {
+                // Zoom out
+                let zoom_speed: f32 = 100.0; // Reduced speed for finer control
+                topdown_cam_height = topdown_cam_height + zoom_speed;
+                
+                // Clamp zoom level (min 1000 units = 10 meters, max 50000 units = 500 meters)
                 if topdown_cam_height > 50000.0 {
                     topdown_cam_height = 50000.0;
                 }
             }
             
-            // Update top-down camera position with new height
-            topdown_cam_pos = heidic_vec3(0.0, topdown_cam_height, 0.0);
+            // MMB button press + drag for panning (translating camera across XZ plane)
+            let mouse_middle_pressed: i32 = heidic_is_mouse_button_pressed(window, 2);
+            if mouse_middle_pressed == 1 {
+                // Get mouse delta for panning
+                let mouse_delta_x: f32 = heidic_get_mouse_delta_x(window);
+                let mouse_delta_y: f32 = heidic_get_mouse_delta_y(window);
+                
+                if mouse_delta_x != 0.0 || mouse_delta_y != 0.0 {
+                    // Pan speed proportional to camera height for consistent feel
+                    // Higher camera = move faster, lower camera = move slower
+                    let pan_speed_factor: f32 = topdown_cam_height / 10000.0; // Normalize to base height
+                    let pan_speed: f32 = 4.0 * pan_speed_factor; // Increased base speed to 4.0
+                    
+                    // Mouse X moves camera X (reversed: drag right = move left, drag left = move right)
+                    topdown_cam_pan_x = topdown_cam_pan_x - mouse_delta_x * pan_speed;
+                    // Mouse Y moves camera Z (reversed: drag down = move forward, drag up = move back)
+                    topdown_cam_pan_z = topdown_cam_pan_z - mouse_delta_y * pan_speed;
+                }
+                mouse_middle_was_pressed = 1;
+            } else {
+                mouse_middle_was_pressed = 0;
+            }
+            
+            // Update top-down camera position with new height and pan offset
+            topdown_cam_pos = heidic_vec3(topdown_cam_pan_x, topdown_cam_height, topdown_cam_pan_z);
             camera_pos = topdown_cam_pos;
             camera_rot = topdown_cam_rot;
         }
@@ -316,6 +424,51 @@ fn main(): void {
         cube_rz = player_rot.z;
         
         heidic_begin_frame();
+        
+        // Main Menu Bar
+        if heidic_imgui_begin_main_menu_bar() == 1 {
+            if heidic_imgui_begin_menu("File") == 1 {
+                if heidic_imgui_menu_item("Save Level As...") == 1 {
+                    // Show native save dialog
+                    let save_result: i32 = heidic_show_save_dialog();
+                    if save_result == 1 {
+                        // Success - level saved via dialog
+                    }
+                }
+                if heidic_imgui_menu_item("Open Level...") == 1 {
+                    // Show native open dialog
+                    let load_result: i32 = heidic_show_open_dialog();
+                    if load_result == 1 {
+                        // Success - level loaded via dialog
+                    }
+                }
+                heidic_imgui_separator();
+                if heidic_imgui_menu_item("Exit") == 1 {
+                    heidic_set_window_should_close(window, 1);
+                }
+                heidic_imgui_end_menu();
+            }
+            if heidic_imgui_begin_menu("Object") == 1 {
+                if heidic_imgui_menu_item("Add Cube") == 1 {
+                    // Create cube at origin (0, 0, 0) with default size
+                    let default_cube_size: f32 = 200.0; // 2 meters
+                    let new_cube_index: i32 = heidic_create_cube(0.0, 0.0, 0.0, default_cube_size, default_cube_size, default_cube_size);
+                    // Select the newly created cube (indices start from 2.0 for created cubes)
+                    // Convert index to float and add 2.0 offset
+                    selected_cube_index = heidic_int_to_float(new_cube_index) + 2.0;
+                    has_selection = 1;
+                    // Update selected cube properties for gizmo
+                    selected_cube_x = 0.0;
+                    selected_cube_y = 0.0;
+                    selected_cube_z = 0.0;
+                    selected_cube_sx = default_cube_size;
+                    selected_cube_sy = default_cube_size;
+                    selected_cube_sz = default_cube_size;
+                }
+                heidic_imgui_end_menu();
+            }
+            heidic_imgui_end_main_menu_bar();
+        }
         
         // Update Camera with Vec3 values
         // Use larger far plane for top-down view to see distant objects
