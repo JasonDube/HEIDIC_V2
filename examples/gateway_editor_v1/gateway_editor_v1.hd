@@ -51,7 +51,7 @@ fn main(): void {
     let cube_sz: f32 = 100.0;
     
     // Movement Speed (cm per frame)
-    let move_speed: f32 = 5.0;
+    let move_speed: f32 = 15.0; // Increased from 5.0 for faster movement
     
     // Rotation Speed (degrees per frame) - for Q/E keys (optional, mouse look is primary)
     let rot_speed: f32 = 2.0;
@@ -627,11 +627,12 @@ fn main(): void {
                 }
                 
                 // Generate random color for the new cube
-                let cube_r: f32 = heidic_random_float();
-                let cube_g: f32 = heidic_random_float();
-                let cube_b: f32 = heidic_random_float();
+                // Use white color (1,1,1) so texture displays at full brightness
+                let cube_r: f32 = 1.0;
+                let cube_g: f32 = 1.0;
+                let cube_b: f32 = 1.0;
                 
-                // Create cube using dynamic storage system with random color
+                // Create cube using dynamic storage system with white color (full texture brightness)
                 let cube_index: i32 = heidic_create_cube_with_color(create_pos.x, create_pos.y, create_pos.z, default_cube_size, default_cube_size, default_cube_size, cube_r, cube_g, cube_b);
                 
                 if cube_index >= 0 {
@@ -1134,78 +1135,189 @@ fn main(): void {
                 debug_hit_face = 5;
             }
             
-            // Draw highlighted outline on the hit face (bright yellow/green)
+            // Draw highlighted filled face (bright yellow/green)
             let highlight_offset: f32 = 1.0; // Small offset to avoid z-fighting
+            let grid_density: f32 = 10.0; // Number of grid lines per face dimension
             if debug_hit_face == 0 {
-                // Left face (negative X) - draw rectangle on left face
+                // Left face (negative X) - draw filled rectangle on left face
                 let y1: f32 = debug_cube_min_y;
                 let y2: f32 = debug_cube_max_y;
                 let z1: f32 = debug_cube_min_z;
                 let z2: f32 = debug_cube_max_z;
                 let x: f32 = debug_cube_min_x - highlight_offset;
+                
+                // Draw outline
                 heidic_draw_line(x, y1, z1, x, y2, z1, 0.0, 1.0, 0.0); // Bottom edge
                 heidic_draw_line(x, y2, z1, x, y2, z2, 0.0, 1.0, 0.0); // Right edge
                 heidic_draw_line(x, y2, z2, x, y1, z2, 0.0, 1.0, 0.0); // Top edge
                 heidic_draw_line(x, y1, z2, x, y1, z1, 0.0, 1.0, 0.0); // Left edge
+                
+                // Fill with grid pattern (vertical lines)
+                let grid_step_y: f32 = (y2 - y1) / grid_density;
+                let grid_i: i32 = 0;
+                while grid_i <= heidic_float_to_int(grid_density) {
+                    let grid_y: f32 = y1 + heidic_int_to_float(grid_i) * grid_step_y;
+                    heidic_draw_line(x, grid_y, z1, x, grid_y, z2, 0.0, 1.0, 0.0);
+                    grid_i = grid_i + 1;
+                }
+                
+                // Fill with grid pattern (horizontal lines)
+                let grid_step_z: f32 = (z2 - z1) / grid_density;
+                grid_i = 0;
+                while grid_i <= heidic_float_to_int(grid_density) {
+                    let grid_z: f32 = z1 + heidic_int_to_float(grid_i) * grid_step_z;
+                    heidic_draw_line(x, y1, grid_z, x, y2, grid_z, 0.0, 1.0, 0.0);
+                    grid_i = grid_i + 1;
+                }
             } else {
                 if debug_hit_face == 1 {
-                    // Right face (positive X) - draw rectangle on right face
+                    // Right face (positive X) - draw filled rectangle on right face
                     let y1: f32 = debug_cube_min_y;
                     let y2: f32 = debug_cube_max_y;
                     let z1: f32 = debug_cube_min_z;
                     let z2: f32 = debug_cube_max_z;
                     let x: f32 = debug_cube_max_x + highlight_offset;
+                    
+                    // Draw outline
                     heidic_draw_line(x, y1, z1, x, y2, z1, 0.0, 1.0, 0.0); // Bottom edge
                     heidic_draw_line(x, y2, z1, x, y2, z2, 0.0, 1.0, 0.0); // Right edge
                     heidic_draw_line(x, y2, z2, x, y1, z2, 0.0, 1.0, 0.0); // Top edge
                     heidic_draw_line(x, y1, z2, x, y1, z1, 0.0, 1.0, 0.0); // Left edge
+                    
+                    // Fill with grid pattern
+                    let grid_step_y: f32 = (y2 - y1) / grid_density;
+                    let grid_i: i32 = 0;
+                    while grid_i <= heidic_float_to_int(grid_density) {
+                        let grid_y: f32 = y1 + heidic_int_to_float(grid_i) * grid_step_y;
+                        heidic_draw_line(x, grid_y, z1, x, grid_y, z2, 0.0, 1.0, 0.0);
+                        grid_i = grid_i + 1;
+                    }
+                    let grid_step_z: f32 = (z2 - z1) / grid_density;
+                    grid_i = 0;
+                    while grid_i <= heidic_float_to_int(grid_density) {
+                        let grid_z: f32 = z1 + heidic_int_to_float(grid_i) * grid_step_z;
+                        heidic_draw_line(x, y1, grid_z, x, y2, grid_z, 0.0, 1.0, 0.0);
+                        grid_i = grid_i + 1;
+                    }
                 } else {
                     if debug_hit_face == 2 {
-                        // Bottom face (negative Y) - draw rectangle on bottom face
+                        // Bottom face (negative Y) - draw filled rectangle on bottom face
                         let x1: f32 = debug_cube_min_x;
                         let x2: f32 = debug_cube_max_x;
                         let z1: f32 = debug_cube_min_z;
                         let z2: f32 = debug_cube_max_z;
                         let y: f32 = debug_cube_min_y - highlight_offset;
+                        
+                        // Draw outline
                         heidic_draw_line(x1, y, z1, x2, y, z1, 0.0, 1.0, 0.0); // Back edge
                         heidic_draw_line(x2, y, z1, x2, y, z2, 0.0, 1.0, 0.0); // Right edge
                         heidic_draw_line(x2, y, z2, x1, y, z2, 0.0, 1.0, 0.0); // Front edge
                         heidic_draw_line(x1, y, z2, x1, y, z1, 0.0, 1.0, 0.0); // Left edge
+                        
+                        // Fill with grid pattern
+                        let grid_step_x: f32 = (x2 - x1) / grid_density;
+                        let grid_i: i32 = 0;
+                        while grid_i <= heidic_float_to_int(grid_density) {
+                            let grid_x: f32 = x1 + heidic_int_to_float(grid_i) * grid_step_x;
+                            heidic_draw_line(grid_x, y, z1, grid_x, y, z2, 0.0, 1.0, 0.0);
+                            grid_i = grid_i + 1;
+                        }
+                        let grid_step_z: f32 = (z2 - z1) / grid_density;
+                        grid_i = 0;
+                        while grid_i <= heidic_float_to_int(grid_density) {
+                            let grid_z: f32 = z1 + heidic_int_to_float(grid_i) * grid_step_z;
+                            heidic_draw_line(x1, y, grid_z, x2, y, grid_z, 0.0, 1.0, 0.0);
+                            grid_i = grid_i + 1;
+                        }
                     } else {
                         if debug_hit_face == 3 {
-                            // Top face (positive Y) - draw rectangle on top face
+                            // Top face (positive Y) - draw filled rectangle on top face
                             let x1: f32 = debug_cube_min_x;
                             let x2: f32 = debug_cube_max_x;
                             let z1: f32 = debug_cube_min_z;
                             let z2: f32 = debug_cube_max_z;
                             let y: f32 = debug_cube_max_y + highlight_offset;
+                            
+                            // Draw outline
                             heidic_draw_line(x1, y, z1, x2, y, z1, 0.0, 1.0, 0.0); // Back edge
                             heidic_draw_line(x2, y, z1, x2, y, z2, 0.0, 1.0, 0.0); // Right edge
                             heidic_draw_line(x2, y, z2, x1, y, z2, 0.0, 1.0, 0.0); // Front edge
                             heidic_draw_line(x1, y, z2, x1, y, z1, 0.0, 1.0, 0.0); // Left edge
+                            
+                            // Fill with grid pattern
+                            let grid_step_x: f32 = (x2 - x1) / grid_density;
+                            let grid_i: i32 = 0;
+                            while grid_i <= heidic_float_to_int(grid_density) {
+                                let grid_x: f32 = x1 + heidic_int_to_float(grid_i) * grid_step_x;
+                                heidic_draw_line(grid_x, y, z1, grid_x, y, z2, 0.0, 1.0, 0.0);
+                                grid_i = grid_i + 1;
+                            }
+                            let grid_step_z: f32 = (z2 - z1) / grid_density;
+                            grid_i = 0;
+                            while grid_i <= heidic_float_to_int(grid_density) {
+                                let grid_z: f32 = z1 + heidic_int_to_float(grid_i) * grid_step_z;
+                                heidic_draw_line(x1, y, grid_z, x2, y, grid_z, 0.0, 1.0, 0.0);
+                                grid_i = grid_i + 1;
+                            }
                         } else {
                             if debug_hit_face == 4 {
-                                // Back face (negative Z) - draw rectangle on back face
+                                // Back face (negative Z) - draw filled rectangle on back face
                                 let x1: f32 = debug_cube_min_x;
                                 let x2: f32 = debug_cube_max_x;
                                 let y1: f32 = debug_cube_min_y;
                                 let y2: f32 = debug_cube_max_y;
                                 let z: f32 = debug_cube_min_z - highlight_offset;
+                                
+                                // Draw outline
                                 heidic_draw_line(x1, y1, z, x2, y1, z, 0.0, 1.0, 0.0); // Bottom edge
                                 heidic_draw_line(x2, y1, z, x2, y2, z, 0.0, 1.0, 0.0); // Right edge
                                 heidic_draw_line(x2, y2, z, x1, y2, z, 0.0, 1.0, 0.0); // Top edge
                                 heidic_draw_line(x1, y2, z, x1, y1, z, 0.0, 1.0, 0.0); // Left edge
+                                
+                                // Fill with grid pattern
+                                let grid_step_x: f32 = (x2 - x1) / grid_density;
+                                let grid_i: i32 = 0;
+                                while grid_i <= heidic_float_to_int(grid_density) {
+                                    let grid_x: f32 = x1 + heidic_int_to_float(grid_i) * grid_step_x;
+                                    heidic_draw_line(grid_x, y1, z, grid_x, y2, z, 0.0, 1.0, 0.0);
+                                    grid_i = grid_i + 1;
+                                }
+                                let grid_step_y: f32 = (y2 - y1) / grid_density;
+                                grid_i = 0;
+                                while grid_i <= heidic_float_to_int(grid_density) {
+                                    let grid_y: f32 = y1 + heidic_int_to_float(grid_i) * grid_step_y;
+                                    heidic_draw_line(x1, grid_y, z, x2, grid_y, z, 0.0, 1.0, 0.0);
+                                    grid_i = grid_i + 1;
+                                }
                             } else {
-                                // Front face (positive Z) - draw rectangle on front face
+                                // Front face (positive Z) - draw filled rectangle on front face
                                 let x1: f32 = debug_cube_min_x;
                                 let x2: f32 = debug_cube_max_x;
                                 let y1: f32 = debug_cube_min_y;
                                 let y2: f32 = debug_cube_max_y;
                                 let z: f32 = debug_cube_max_z + highlight_offset;
+                                
+                                // Draw outline
                                 heidic_draw_line(x1, y1, z, x2, y1, z, 0.0, 1.0, 0.0); // Bottom edge
                                 heidic_draw_line(x2, y1, z, x2, y2, z, 0.0, 1.0, 0.0); // Right edge
                                 heidic_draw_line(x2, y2, z, x1, y2, z, 0.0, 1.0, 0.0); // Top edge
                                 heidic_draw_line(x1, y2, z, x1, y1, z, 0.0, 1.0, 0.0); // Left edge
+                                
+                                // Fill with grid pattern
+                                let grid_step_x: f32 = (x2 - x1) / grid_density;
+                                let grid_i: i32 = 0;
+                                while grid_i <= heidic_float_to_int(grid_density) {
+                                    let grid_x: f32 = x1 + heidic_int_to_float(grid_i) * grid_step_x;
+                                    heidic_draw_line(grid_x, y1, z, grid_x, y2, z, 0.0, 1.0, 0.0);
+                                    grid_i = grid_i + 1;
+                                }
+                                let grid_step_y: f32 = (y2 - y1) / grid_density;
+                                grid_i = 0;
+                                while grid_i <= heidic_float_to_int(grid_density) {
+                                    let grid_y: f32 = y1 + heidic_int_to_float(grid_i) * grid_step_y;
+                                    heidic_draw_line(x1, grid_y, z, x2, grid_y, z, 0.0, 1.0, 0.0);
+                                    grid_i = grid_i + 1;
+                                }
                             }
                         }
                     }
