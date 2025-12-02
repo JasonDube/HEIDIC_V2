@@ -133,6 +133,9 @@ extern "C" {
     void heidic_draw_cube_colored(float x, float y, float z, float rx, float ry, float rz, float sx, float sy, float sz, float r, float g, float b);
 }
 extern "C" {
+    void heidic_flush_colored_cubes();
+}
+extern "C" {
     void heidic_draw_line(float x1, float y1, float z1, float x2, float y2, float z2, float r, float g, float b);
 }
 extern "C" {
@@ -413,6 +416,12 @@ extern "C" {
 }
 extern "C" {
     float heidic_get_cube_b(int32_t index);
+}
+extern "C" {
+    const char* heidic_get_cube_texture_name(int32_t index);
+}
+extern "C" {
+    int32_t heidic_load_texture_for_rendering(const char* texture_name);
 }
 extern "C" {
     int32_t heidic_get_cube_active(int32_t index);
@@ -1205,6 +1214,7 @@ int heidic_main() {
                 } else {
                     heidic_update_camera(camera_pos.x, camera_pos.y, camera_pos.z, camera_rot.x, camera_rot.y, camera_rot.z);
                 }
+                heidic_load_texture_for_rendering("default.bmp");
                 heidic_draw_cube_grey(0, -500, 0, 0, 0, 0, 10000, 100, 10000);
                 if ((show_grid == 1)) {
                     heidic_draw_ground_plane(20000, 0.5, 0.5, 0.5);
@@ -1219,24 +1229,39 @@ int heidic_main() {
                 }
                 int32_t  cube_draw_index = 0;
                 int32_t  total_cubes = heidic_get_cube_total_count();
+                std::string  current_texture = "";
+                int32_t  first_cube = 1;
                 while ((cube_draw_index < total_cubes)) {
                     if ((heidic_get_cube_active(cube_draw_index) == 1)) {
+                        std::string  cube_texture_name = heidic_get_cube_texture_name(cube_draw_index);
+                        if ((cube_texture_name == "")) {
+                            cube_texture_name = "default.bmp";
+                        }
+                        if (((first_cube == 0) && (cube_texture_name != current_texture))) {
+                            heidic_flush_colored_cubes();
+                            heidic_load_texture_for_rendering(cube_texture_name.c_str());
+                            current_texture = cube_texture_name;
+                        } else {
+                            if ((first_cube == 1)) {
+                                heidic_load_texture_for_rendering(cube_texture_name.c_str());
+                                current_texture = cube_texture_name;
+                                first_cube = 0;
+                            }
+                        }
                         float  cube_x = heidic_get_cube_x(cube_draw_index);
                         float  cube_y = heidic_get_cube_y(cube_draw_index);
                         float  cube_z = heidic_get_cube_z(cube_draw_index);
                         float  cube_sx = heidic_get_cube_sx(cube_draw_index);
                         float  cube_sy = heidic_get_cube_sy(cube_draw_index);
                         float  cube_sz = heidic_get_cube_sz(cube_draw_index);
-                        float  cube_r = heidic_get_cube_r(cube_draw_index);
-                        float  cube_g = heidic_get_cube_g(cube_draw_index);
-                        float  cube_b = heidic_get_cube_b(cube_draw_index);
-                        heidic_draw_cube_colored(cube_x, cube_y, cube_z, 0, 0, 0, cube_sx, cube_sy, cube_sz, cube_r, cube_g, cube_b);
+                        heidic_draw_cube_colored(cube_x, cube_y, cube_z, 0, 0, 0, cube_sx, cube_sy, cube_sz, 1, 1, 1);
                         if ((heidic_is_cube_selected(cube_draw_index) == 1)) {
                             heidic_draw_cube_wireframe(cube_x, cube_y, cube_z, 0, 0, 0, (cube_sx * 1.01), (cube_sy * 1.01), (cube_sz * 1.01), 1, 1, 1);
                         }
                     }
                     cube_draw_index = (cube_draw_index + 1);
                 }
+                heidic_flush_colored_cubes();
                 heidic_draw_ray(window, 50000, 1, 1, 0);
                 Vec3  debug_ray_origin = heidic_get_mouse_ray_origin(window);
                 Vec3  debug_ray_dir = heidic_get_mouse_ray_dir(window);
@@ -1713,7 +1738,6 @@ int heidic_main() {
                 if ((heidic_imgui_begin("Texture Swatches") == 1)) {
                     heidic_load_texture_list();
                     int32_t  texture_count = heidic_get_texture_count();
-                    std::string  selected_texture = heidic_get_selected_texture();
                     int32_t  texture_index = 0;
                     int32_t  items_per_row = 6;
                     int32_t  current_col = 0;
@@ -1722,6 +1746,7 @@ int heidic_main() {
                         std::string  texture_name = heidic_get_texture_name(texture_index);
                         int64_t  texture_id = heidic_get_texture_preview_id(texture_name.c_str());
                         heidic_imgui_push_id(texture_index);
+                        std::string  selected_texture = heidic_get_selected_texture();
                         int32_t  is_selected = 0;
                         if ((selected_texture == texture_name)) {
                             is_selected = 1;
@@ -1736,7 +1761,7 @@ int heidic_main() {
                                 tint_g = 1;
                                 tint_b = 0.5;
                             }
-                            std::string  button_id = "##tex_btn_";
+                            std::string  button_id = texture_name;
                             if ((heidic_imgui_image_button(button_id.c_str(), texture_id, swatch_size, swatch_size, tint_r, tint_g, tint_b, tint_a) == 1)) {
                                 heidic_set_selected_texture(texture_name.c_str());
                             }

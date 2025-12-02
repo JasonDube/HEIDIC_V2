@@ -5,6 +5,7 @@
 #include <iostream>
 #include <vector>
 #include <cstring>
+#include <cstdio>  // For snprintf
 #include <thread>
 #include <chrono>
 #include <cmath>
@@ -12,9 +13,26 @@
 #include <array>
 #include <fstream>
 #include <cstdlib>  // For std::abs
+#include <map>  // For combination tracking
+#include <functional>  // For std::function
+#include <set>  // For tracking begun windows
+#include <stack>  // For tracking open windows stack
+#include <string>  // For window name tracking
+#include <queue>  // For BFS in combination logic
 #define STB_IMAGE_IMPLEMENTATION
 #include "../third_party/stb_image.h"
 #include <sstream>
+#include <filesystem>  // For directory creation
+#ifdef _WIN32
+#include <direct.h>  // For _mkdir on Windows
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>  // For glfwGetWin32Window
+#else
+#include <sys/stat.h>  // For mkdir on Unix
+#endif
+
+// Native File Dialog Extended
+#include "../third_party/nfd.h"
 
 // ImGui
 #include "../third_party/imgui/imgui.h"
@@ -98,8 +116,24 @@ static VkCommandPool g_commandPool = VK_NULL_HANDLE;
 static std::vector<VkCommandBuffer> g_commandBuffers;
 static VkQueue g_graphicsQueue = VK_NULL_HANDLE;
 static uint32_t g_graphicsQueueFamilyIndex = 0;
+static bool g_commandBufferStarted = false;  // Track if command buffer was started this frame
+
+// Dock ID tracking removed - no longer needed
 static uint32_t g_currentFrame = 0;
 static VkExtent2D g_swapchainExtent = {};
+
+// Simple combination rename state (for new Outliner2)
+static int g_editingCombinationId = -1;  // Which combination is currently being renamed (-1 = none)
+static int g_pendingStartEditingId = -1;  // Combination to start editing next frame (-1 = none)
+static char g_combinationNameBuffer[256] = "";  // Buffer for editing combination name
+// Note: g_nextCombinationId is declared later in the file (around line 3345) with other combination tracking variables
+
+// Safety: Track which windows have been begun this frame to prevent double-Begin() calls
+static std::set<std::string> g_begunWindowsThisFrame;
+// Track which windows actually called Begin() successfully (for End() safety check)
+static std::set<std::string> g_windowsThatActuallyBegan;
+// Track which windows are currently open (for matching End() calls)
+static std::stack<std::string> g_openWindowsStack;
 
 // Additional state
 static std::vector<VkImage> g_swapchainImages;
@@ -128,11 +162,34 @@ static std::vector<VkDescriptorSet> g_descriptorSets;
 static std::vector<VkBuffer> g_uniformBuffers;
 static std::vector<VkDeviceMemory> g_uniformBuffersMemory;
 
-// Texture resources (single global texture)
+// Dynamic Texture Descriptor Pool System
+// Allows switching textures multiple times per frame by having a pool of descriptor sets
+static const int MAX_TEXTURE_SWITCHES_PER_FRAME = 256;
+static std::vector<std::vector<VkDescriptorSet>> g_batchDescriptorSets; // [frame][batch]
+static std::vector<int> g_currentBatchIndex; // [frame]
+
+// Texture Cache - keeps all loaded textures alive
+struct TextureResource {
+    VkImage image;
+    VkDeviceMemory memory;
+    VkImageView view;
+};
+static std::map<std::string, TextureResource> g_textureCache;
+
+// Texture resources (current global texture - points to cached texture)
 static VkImage g_textureImage = VK_NULL_HANDLE;
 static VkDeviceMemory g_textureImageMemory = VK_NULL_HANDLE;
 static VkImageView g_textureImageView = VK_NULL_HANDLE;
 static VkSampler g_textureSampler = VK_NULL_HANDLE;
+// Deferred descriptor set update (to avoid updating during command buffer recording)
+static VkImageView g_pendingDescriptorTextureImageView = VK_NULL_HANDLE;
+static bool g_pendingDescriptorUpdate = false;
+// Track which texture is currently bound to the descriptor set
+static VkImageView g_currentBoundTextureImageView = VK_NULL_HANDLE;
+// Pending texture destruction (deferred until GPU is done)
+static VkImage g_pendingTextureImage = VK_NULL_HANDLE;
+static VkDeviceMemory g_pendingTextureImageMemory = VK_NULL_HANDLE;
+static VkImageView g_pendingTextureImageView = VK_NULL_HANDLE;
 
 // Camera matrices for raycasting
 static glm::mat4 g_currentView = glm::mat4(1.0f);
@@ -218,50 +275,40 @@ static void createTextureAndDescriptors(GLFWwindow* /*window*/) {
         // Still need to write descriptors for UBO + sampler
     }
 
-    // Load PNG (test.png) - try multiple paths
+    // Load default.bmp from gateway_editor_v1/textures/ - try multiple paths
     int texWidth, texHeight, texChannels;
     stbi_uc* pixels = nullptr;
     
     const char* paths[] = {
-        "../models/test.png",      // From examples/ascii_import_test/
-        "../../models/test.png",   // From examples/ascii_import_test/ (going up to heidic_v2)
-        "models/test.png",         // From heidic_v2/
-        "../test.png"              // Fallback
+        "examples/gateway_editor_v1/textures/default.bmp",  // From heidic_v2 root
+        "../examples/gateway_editor_v1/textures/default.bmp", // From examples/gateway_editor_v1/
+        "textures/default.bmp",                              // From gateway_editor_v1/
+        "default.bmp"                                        // Fallback
     };
     
+    bool usingFallback = false;
     for (int i = 0; i < 4; i++) {
         pixels = stbi_load(paths[i], &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
         if (pixels) {
-            std::cout << "Loaded texture from: " << paths[i] << std::endl;
+            std::cout << "[EDEN] Loaded texture from: " << paths[i] << " (" << texWidth << "x" << texHeight << ")" << std::endl;
             std::cout.flush();
             break;
         }
     }
     
-    // Always use a bright white texture for cubes to ensure full brightness
-    // This ensures vertex colors are displayed at full intensity
-    bool usingFallback = false;
+    // Fallback to white texture if loading failed
     if (!pixels) {
-        std::cerr << "Failed to load texture image from all paths. Using fallback 1x1 white texture." << std::endl;
+        std::cerr << "[EDEN] Failed to load default.bmp from all paths. Using fallback 1x1 white texture." << std::endl;
         usingFallback = true;
+        texWidth = 1;
+        texHeight = 1;
+        texChannels = 4;
+        pixels = new stbi_uc[4];
+        pixels[0] = 255; // R
+        pixels[1] = 255; // G
+        pixels[2] = 255; // B
+        pixels[3] = 255; // A
     }
-    
-    // Force white texture for consistent bright rendering
-    // Free any loaded texture and create a white one
-    if (pixels && !usingFallback) {
-        stbi_image_free(pixels);
-    }
-    
-    // Create a bright white texture (ensures full brightness)
-    texWidth = 1;
-    texHeight = 1;
-    texChannels = 4;
-    pixels = new stbi_uc[4];
-    pixels[0] = 255; // R - full brightness
-    pixels[1] = 255; // G - full brightness
-    pixels[2] = 255; // B - full brightness
-    pixels[3] = 255; // A
-    usingFallback = true; // Mark as fallback so we use delete[] instead of stbi_image_free
 
     VkDeviceSize imageSize = (VkDeviceSize)(texWidth) * texHeight * 4;
 
@@ -274,8 +321,12 @@ static void createTextureAndDescriptors(GLFWwindow* /*window*/) {
     memcpy(data, pixels, (size_t)imageSize);
     vkUnmapMemory(g_device, stagingBufferMemory);
 
-    // Free pixels - always use delete[] since we're now always creating a white texture
-    delete[] pixels;
+    // Free pixels - use appropriate method based on how we loaded it
+    if (usingFallback) {
+        delete[] pixels;
+    } else {
+        stbi_image_free(pixels);
+    }
 
     VkImageCreateInfo imageInfo = {};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -423,10 +474,26 @@ static VkBuffer g_cubeVertexBuffer = VK_NULL_HANDLE;
 static VkDeviceMemory g_cubeVertexMemory = VK_NULL_HANDLE;
 static uint32_t g_cubeVertexCount = 0;
 
+// Static grey cube buffer for ground plane
+static VkBuffer g_greyCubeVertexBuffer = VK_NULL_HANDLE;
+static VkDeviceMemory g_greyCubeVertexMemory = VK_NULL_HANDLE;
+static uint32_t g_greyCubeVertexCount = 0;
+
+// Static blue cube buffer for created cubes
+static VkBuffer g_blueCubeVertexBuffer = VK_NULL_HANDLE;
+static VkDeviceMemory g_blueCubeVertexMemory = VK_NULL_HANDLE;
+static uint32_t g_blueCubeVertexCount = 0;
+
 // Line resources
 static std::vector<Vertex> g_lineVertices;
 static VkBuffer g_lineVertexBuffer = VK_NULL_HANDLE;
 static VkDeviceMemory g_lineVertexMemory = VK_NULL_HANDLE;
+
+// Colored cube batching system (similar to lines)
+static std::vector<Vertex> g_coloredCubeVertices;
+static std::vector<glm::mat4> g_coloredCubeTransforms;
+static VkBuffer g_coloredCubeVertexBuffer = VK_NULL_HANDLE;
+static VkDeviceMemory g_coloredCubeVertexMemory = VK_NULL_HANDLE;
 static VkDeviceSize g_lineBufferSize = 1024 * 1024; // 1MB buffer for lines
 
 // Helper to read binary file (for shaders)
@@ -497,55 +564,55 @@ static void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPr
 
 // Create Cube Vertex Buffer
 static void createCube() {
-    // 1x1x1 cube centered at origin, with colored faces
+    // 1x1x1 cube centered at origin, with textured faces (proper UVs, white color for full brightness)
     std::vector<Vertex> vertices = {
-        // Front face (Red)
-        {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}},
-        {{ 0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}},
-        {{ 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}},
-        {{ 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}},
-        {{-0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}},
-        {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}},
+        // Front face - UVs: bottom-left (0,0), bottom-right (1,0), top-right (1,1), top-left (0,1)
+        {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}}, // bottom-left
+        {{ 0.5f, -0.5f,  0.5f}, {1.0f, 0.0f}, {1.0f, 1.0f, 1.0f}}, // bottom-right
+        {{ 0.5f,  0.5f,  0.5f}, {1.0f, 1.0f}, {1.0f, 1.0f, 1.0f}}, // top-right
+        {{ 0.5f,  0.5f,  0.5f}, {1.0f, 1.0f}, {1.0f, 1.0f, 1.0f}}, // top-right (duplicate)
+        {{-0.5f,  0.5f,  0.5f}, {0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}}, // top-left
+        {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}}, // bottom-left (duplicate)
 
-        // Back face (Green)
-        {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}},
-        {{-0.5f,  0.5f, -0.5f}, {0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}},
-        {{ 0.5f,  0.5f, -0.5f}, {0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}},
-        {{ 0.5f,  0.5f, -0.5f}, {0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}},
-        {{ 0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}},
-        {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}},
+        // Back face - UVs: bottom-left (0,0), bottom-right (1,0), top-right (1,1), top-left (0,1)
+        {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f}, {1.0f, 1.0f, 1.0f}}, // bottom-left (flipped X for back)
+        {{-0.5f,  0.5f, -0.5f}, {1.0f, 1.0f}, {1.0f, 1.0f, 1.0f}}, // top-left
+        {{ 0.5f,  0.5f, -0.5f}, {0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}}, // top-right
+        {{ 0.5f,  0.5f, -0.5f}, {0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}}, // top-right (duplicate)
+        {{ 0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}}, // bottom-right
+        {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f}, {1.0f, 1.0f, 1.0f}}, // bottom-left (duplicate)
 
-        // Top face (Blue)
-        {{-0.5f,  0.5f, -0.5f}, {0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}},
-        {{-0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}},
-        {{ 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}},
-        {{ 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}},
-        {{ 0.5f,  0.5f, -0.5f}, {0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}},
-        {{-0.5f,  0.5f, -0.5f}, {0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}},
+        // Top face - UVs: bottom-left (0,0), bottom-right (1,0), top-right (1,1), top-left (0,1)
+        {{-0.5f,  0.5f, -0.5f}, {0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}}, // top-left
+        {{-0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}}, // bottom-left
+        {{ 0.5f,  0.5f,  0.5f}, {1.0f, 0.0f}, {1.0f, 1.0f, 1.0f}}, // bottom-right
+        {{ 0.5f,  0.5f,  0.5f}, {1.0f, 0.0f}, {1.0f, 1.0f, 1.0f}}, // bottom-right (duplicate)
+        {{ 0.5f,  0.5f, -0.5f}, {1.0f, 1.0f}, {1.0f, 1.0f, 1.0f}}, // top-right
+        {{-0.5f,  0.5f, -0.5f}, {0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}}, // top-left (duplicate)
 
-        // Bottom face (Yellow)
-        {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {1.0f, 1.0f, 0.0f}},
-        {{ 0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {1.0f, 1.0f, 0.0f}},
-        {{ 0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {1.0f, 1.0f, 0.0f}},
-        {{ 0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {1.0f, 1.0f, 0.0f}},
-        {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {1.0f, 1.0f, 0.0f}},
-        {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {1.0f, 1.0f, 0.0f}},
+        // Bottom face - UVs: bottom-left (0,0), bottom-right (1,0), top-right (1,1), top-left (0,1)
+        {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}}, // bottom-left
+        {{ 0.5f, -0.5f, -0.5f}, {1.0f, 0.0f}, {1.0f, 1.0f, 1.0f}}, // bottom-right
+        {{ 0.5f, -0.5f,  0.5f}, {1.0f, 1.0f}, {1.0f, 1.0f, 1.0f}}, // top-right
+        {{ 0.5f, -0.5f,  0.5f}, {1.0f, 1.0f}, {1.0f, 1.0f, 1.0f}}, // top-right (duplicate)
+        {{-0.5f, -0.5f,  0.5f}, {0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}}, // top-left
+        {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}}, // bottom-left (duplicate)
 
-        // Right face (Cyan)
-        {{ 0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {0.0f, 1.0f, 1.0f}},
-        {{ 0.5f,  0.5f, -0.5f}, {0.0f, 0.0f}, {0.0f, 1.0f, 1.0f}},
-        {{ 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {0.0f, 1.0f, 1.0f}},
-        {{ 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {0.0f, 1.0f, 1.0f}},
-        {{ 0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {0.0f, 1.0f, 1.0f}},
-        {{ 0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {0.0f, 1.0f, 1.0f}},
+        // Right face - UVs: bottom-left (0,0), bottom-right (1,0), top-right (1,1), top-left (0,1)
+        {{ 0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}}, // bottom-left
+        {{ 0.5f,  0.5f, -0.5f}, {0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}}, // top-left
+        {{ 0.5f,  0.5f,  0.5f}, {1.0f, 1.0f}, {1.0f, 1.0f, 1.0f}}, // top-right
+        {{ 0.5f,  0.5f,  0.5f}, {1.0f, 1.0f}, {1.0f, 1.0f, 1.0f}}, // top-right (duplicate)
+        {{ 0.5f, -0.5f,  0.5f}, {1.0f, 0.0f}, {1.0f, 1.0f, 1.0f}}, // bottom-right
+        {{ 0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}}, // bottom-left (duplicate)
 
-        // Left face (Magenta)
-        {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {1.0f, 0.0f, 1.0f}},
-        {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {1.0f, 0.0f, 1.0f}},
-        {{-0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {1.0f, 0.0f, 1.0f}},
-        {{-0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {1.0f, 0.0f, 1.0f}},
-        {{-0.5f,  0.5f, -0.5f}, {0.0f, 0.0f}, {1.0f, 0.0f, 1.0f}},
-        {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {1.0f, 0.0f, 1.0f}}
+        // Left face - UVs: bottom-left (0,0), bottom-right (1,0), top-right (1,1), top-left (0,1)
+        {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f}, {1.0f, 1.0f, 1.0f}}, // bottom-right (flipped X)
+        {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}}, // bottom-left
+        {{-0.5f,  0.5f,  0.5f}, {0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}}, // top-left
+        {{-0.5f,  0.5f,  0.5f}, {0.0f, 1.0f}, {1.0f, 1.0f, 1.0f}}, // top-left (duplicate)
+        {{-0.5f,  0.5f, -0.5f}, {1.0f, 1.0f}, {1.0f, 1.0f, 1.0f}}, // top-right
+        {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f}, {1.0f, 1.0f, 1.0f}}  // bottom-right (duplicate)
     };
     
     g_cubeVertexCount = static_cast<uint32_t>(vertices.size());
@@ -1140,20 +1207,24 @@ extern "C" int heidic_init_renderer(GLFWwindow* window) {
         }
 
         // 14. Descriptor Pool
+        // We need enough descriptors for MAX_TEXTURE_SWITCHES_PER_FRAME per frame
+        uint32_t totalSets = static_cast<uint32_t>(g_swapchainImageCount * (1 + MAX_TEXTURE_SWITCHES_PER_FRAME));
+        
         VkDescriptorPoolSize poolSizes[2] = {};
         poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        poolSizes[0].descriptorCount = static_cast<uint32_t>(g_swapchainImageCount);
+        poolSizes[0].descriptorCount = totalSets;
         poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        poolSizes[1].descriptorCount = static_cast<uint32_t>(g_swapchainImageCount);
+        poolSizes[1].descriptorCount = totalSets;
 
         VkDescriptorPoolCreateInfo poolInfo2 = {};
         poolInfo2.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         poolInfo2.poolSizeCount = 2;
         poolInfo2.pPoolSizes = poolSizes;
-        poolInfo2.maxSets = static_cast<uint32_t>(g_swapchainImageCount);
+        poolInfo2.maxSets = totalSets;
         vkCreateDescriptorPool(g_device, &poolInfo2, nullptr, &g_descriptorPool);
 
         // 15. Descriptor Sets
+        // A. Create Global/Default Descriptor Sets (1 per frame) - kept for compatibility/default use
         std::vector<VkDescriptorSetLayout> layouts(g_swapchainImageCount, g_descriptorSetLayout);
         VkDescriptorSetAllocateInfo allocInfo = {};
         allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -1163,7 +1234,42 @@ extern "C" int heidic_init_renderer(GLFWwindow* window) {
         g_descriptorSets.resize(g_swapchainImageCount);
         vkAllocateDescriptorSets(g_device, &allocInfo, g_descriptorSets.data());
 
-        // Create texture and write descriptors (UBO + sampler)
+        // B. Create Batch Descriptor Sets (MAX_TEXTURE_SWITCHES_PER_FRAME per frame)
+        g_batchDescriptorSets.resize(g_swapchainImageCount);
+        g_currentBatchIndex.resize(g_swapchainImageCount, 0);
+        
+        for (size_t i = 0; i < g_swapchainImageCount; i++) {
+            g_batchDescriptorSets[i].resize(MAX_TEXTURE_SWITCHES_PER_FRAME);
+            std::vector<VkDescriptorSetLayout> batchLayouts(MAX_TEXTURE_SWITCHES_PER_FRAME, g_descriptorSetLayout);
+            
+            VkDescriptorSetAllocateInfo batchAllocInfo = {};
+            batchAllocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            batchAllocInfo.descriptorPool = g_descriptorPool;
+            batchAllocInfo.descriptorSetCount = static_cast<uint32_t>(MAX_TEXTURE_SWITCHES_PER_FRAME);
+            batchAllocInfo.pSetLayouts = batchLayouts.data();
+            
+            vkAllocateDescriptorSets(g_device, &batchAllocInfo, g_batchDescriptorSets[i].data());
+            
+            // Initialize UBO binding for all batch sets (it's constant for the frame)
+            for (int b = 0; b < MAX_TEXTURE_SWITCHES_PER_FRAME; b++) {
+                VkDescriptorBufferInfo bufferInfo = {};
+                bufferInfo.buffer = g_uniformBuffers[i];
+                bufferInfo.offset = 0;
+                bufferInfo.range = sizeof(UniformBufferObject);
+                
+                VkWriteDescriptorSet descriptorWrite = {};
+                descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+                descriptorWrite.dstSet = g_batchDescriptorSets[i][b];
+                descriptorWrite.dstBinding = 0; // UBO Binding
+                descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                descriptorWrite.descriptorCount = 1;
+                descriptorWrite.pBufferInfo = &bufferInfo;
+                
+                vkUpdateDescriptorSets(g_device, 1, &descriptorWrite, 0, nullptr);
+            }
+        }
+
+        // Create texture and write descriptors (UBO + sampler) for default sets
         createTextureAndDescriptors(window);
 
         // 16. Command Buffers
@@ -1201,9 +1307,206 @@ extern "C" int heidic_init_renderer(GLFWwindow* window) {
 
         // 18. Cube
         createCube();
+        
+        // 18b. Create grey cube for ground plane (no texture, uses vertex color)
+        float greyR = 0.5f, greyG = 0.5f, greyB = 0.5f;
+        std::vector<Vertex> greyVertices = {
+            // Front face - UVs (0,0) to trigger vertex color mode
+            {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{ 0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{ 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{ 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{-0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            // Back face
+            {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{-0.5f,  0.5f, -0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{ 0.5f,  0.5f, -0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{ 0.5f,  0.5f, -0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{ 0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            // Top face
+            {{-0.5f,  0.5f, -0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{-0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{ 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{ 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{ 0.5f,  0.5f, -0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{-0.5f,  0.5f, -0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            // Bottom face
+            {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{ 0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{ 0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{ 0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            // Right face
+            {{ 0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{ 0.5f,  0.5f, -0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{ 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{ 0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{ 0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{ 0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            // Left face
+            {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{-0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{-0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{-0.5f,  0.5f, -0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}},
+            {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {greyR, greyG, greyB}}
+        };
+        
+        g_greyCubeVertexCount = static_cast<uint32_t>(greyVertices.size());
+        VkDeviceSize greyBufferSize = sizeof(greyVertices[0]) * greyVertices.size();
+        
+        VkBuffer greyStagingBuffer;
+        VkDeviceMemory greyStagingBufferMemory;
+        createBuffer(greyBufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, greyStagingBuffer, greyStagingBufferMemory);
+        
+        void* greyData;
+        vkMapMemory(g_device, greyStagingBufferMemory, 0, greyBufferSize, 0, &greyData);
+        memcpy(greyData, greyVertices.data(), (size_t)greyBufferSize);
+        vkUnmapMemory(g_device, greyStagingBufferMemory);
+        
+        createBuffer(greyBufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, g_greyCubeVertexBuffer, g_greyCubeVertexMemory);
+        
+        VkCommandBufferAllocateInfo greyAllocInfo = {};
+        greyAllocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        greyAllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        greyAllocInfo.commandPool = g_commandPool;
+        greyAllocInfo.commandBufferCount = 1;
+        
+        VkCommandBuffer greyCommandBuffer;
+        vkAllocateCommandBuffers(g_device, &greyAllocInfo, &greyCommandBuffer);
+        
+        VkCommandBufferBeginInfo greyBeginInfo = {};
+        greyBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        greyBeginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        
+        vkBeginCommandBuffer(greyCommandBuffer, &greyBeginInfo);
+        
+        VkBufferCopy greyCopyRegion = {};
+        greyCopyRegion.srcOffset = 0;
+        greyCopyRegion.dstOffset = 0;
+        greyCopyRegion.size = greyBufferSize;
+        vkCmdCopyBuffer(greyCommandBuffer, greyStagingBuffer, g_greyCubeVertexBuffer, 1, &greyCopyRegion);
+        
+        vkEndCommandBuffer(greyCommandBuffer);
+        
+        VkSubmitInfo greySubmitInfo = {};
+        greySubmitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        greySubmitInfo.commandBufferCount = 1;
+        greySubmitInfo.pCommandBuffers = &greyCommandBuffer;
+        
+        vkQueueSubmit(g_graphicsQueue, 1, &greySubmitInfo, VK_NULL_HANDLE);
+        vkQueueWaitIdle(g_graphicsQueue);
+        
+        vkFreeCommandBuffers(g_device, g_commandPool, 1, &greyCommandBuffer);
+        vkDestroyBuffer(g_device, greyStagingBuffer, nullptr);
+        vkFreeMemory(g_device, greyStagingBufferMemory, nullptr);
+        
+        // 18c. Create blue cube for created cubes (with proper UVs for texture)
+        float blueR = 0.2f, blueG = 0.4f, blueB = 1.0f; // Bright blue
+        std::vector<Vertex> blueVertices = {
+            // Front face - proper UVs
+            {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {blueR, blueG, blueB}},
+            {{ 0.5f, -0.5f,  0.5f}, {1.0f, 0.0f}, {blueR, blueG, blueB}},
+            {{ 0.5f,  0.5f,  0.5f}, {1.0f, 1.0f}, {blueR, blueG, blueB}},
+            {{ 0.5f,  0.5f,  0.5f}, {1.0f, 1.0f}, {blueR, blueG, blueB}},
+            {{-0.5f,  0.5f,  0.5f}, {0.0f, 1.0f}, {blueR, blueG, blueB}},
+            {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {blueR, blueG, blueB}},
+            // Back face
+            {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f}, {blueR, blueG, blueB}},
+            {{-0.5f,  0.5f, -0.5f}, {1.0f, 1.0f}, {blueR, blueG, blueB}},
+            {{ 0.5f,  0.5f, -0.5f}, {0.0f, 1.0f}, {blueR, blueG, blueB}},
+            {{ 0.5f,  0.5f, -0.5f}, {0.0f, 1.0f}, {blueR, blueG, blueB}},
+            {{ 0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {blueR, blueG, blueB}},
+            {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f}, {blueR, blueG, blueB}},
+            // Top face
+            {{-0.5f,  0.5f, -0.5f}, {0.0f, 1.0f}, {blueR, blueG, blueB}},
+            {{-0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {blueR, blueG, blueB}},
+            {{ 0.5f,  0.5f,  0.5f}, {1.0f, 0.0f}, {blueR, blueG, blueB}},
+            {{ 0.5f,  0.5f,  0.5f}, {1.0f, 0.0f}, {blueR, blueG, blueB}},
+            {{ 0.5f,  0.5f, -0.5f}, {1.0f, 1.0f}, {blueR, blueG, blueB}},
+            {{-0.5f,  0.5f, -0.5f}, {0.0f, 1.0f}, {blueR, blueG, blueB}},
+            // Bottom face
+            {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {blueR, blueG, blueB}},
+            {{ 0.5f, -0.5f, -0.5f}, {1.0f, 0.0f}, {blueR, blueG, blueB}},
+            {{ 0.5f, -0.5f,  0.5f}, {1.0f, 1.0f}, {blueR, blueG, blueB}},
+            {{ 0.5f, -0.5f,  0.5f}, {1.0f, 1.0f}, {blueR, blueG, blueB}},
+            {{-0.5f, -0.5f,  0.5f}, {0.0f, 1.0f}, {blueR, blueG, blueB}},
+            {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {blueR, blueG, blueB}},
+            // Right face
+            {{ 0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {blueR, blueG, blueB}},
+            {{ 0.5f,  0.5f, -0.5f}, {0.0f, 1.0f}, {blueR, blueG, blueB}},
+            {{ 0.5f,  0.5f,  0.5f}, {1.0f, 1.0f}, {blueR, blueG, blueB}},
+            {{ 0.5f,  0.5f,  0.5f}, {1.0f, 1.0f}, {blueR, blueG, blueB}},
+            {{ 0.5f, -0.5f,  0.5f}, {1.0f, 0.0f}, {blueR, blueG, blueB}},
+            {{ 0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {blueR, blueG, blueB}},
+            // Left face
+            {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f}, {blueR, blueG, blueB}},
+            {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {blueR, blueG, blueB}},
+            {{-0.5f,  0.5f,  0.5f}, {0.0f, 1.0f}, {blueR, blueG, blueB}},
+            {{-0.5f,  0.5f,  0.5f}, {0.0f, 1.0f}, {blueR, blueG, blueB}},
+            {{-0.5f,  0.5f, -0.5f}, {1.0f, 1.0f}, {blueR, blueG, blueB}},
+            {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f}, {blueR, blueG, blueB}}
+        };
+        
+        g_blueCubeVertexCount = static_cast<uint32_t>(blueVertices.size());
+        VkDeviceSize blueBufferSize = sizeof(blueVertices[0]) * blueVertices.size();
+        
+        VkBuffer blueStagingBuffer;
+        VkDeviceMemory blueStagingBufferMemory;
+        createBuffer(blueBufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, blueStagingBuffer, blueStagingBufferMemory);
+        
+        void* blueData;
+        vkMapMemory(g_device, blueStagingBufferMemory, 0, blueBufferSize, 0, &blueData);
+        memcpy(blueData, blueVertices.data(), (size_t)blueBufferSize);
+        vkUnmapMemory(g_device, blueStagingBufferMemory);
+        
+        createBuffer(blueBufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, g_blueCubeVertexBuffer, g_blueCubeVertexMemory);
+        
+        VkCommandBufferAllocateInfo blueAllocInfo = {};
+        blueAllocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        blueAllocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        blueAllocInfo.commandPool = g_commandPool;
+        blueAllocInfo.commandBufferCount = 1;
+        
+        VkCommandBuffer blueCommandBuffer;
+        vkAllocateCommandBuffers(g_device, &blueAllocInfo, &blueCommandBuffer);
+        
+        VkCommandBufferBeginInfo blueBeginInfo = {};
+        blueBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        blueBeginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        
+        vkBeginCommandBuffer(blueCommandBuffer, &blueBeginInfo);
+        
+        VkBufferCopy blueCopyRegion = {};
+        blueCopyRegion.srcOffset = 0;
+        blueCopyRegion.dstOffset = 0;
+        blueCopyRegion.size = blueBufferSize;
+        vkCmdCopyBuffer(blueCommandBuffer, blueStagingBuffer, g_blueCubeVertexBuffer, 1, &blueCopyRegion);
+        
+        vkEndCommandBuffer(blueCommandBuffer);
+        
+        VkSubmitInfo blueSubmitInfo = {};
+        blueSubmitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        blueSubmitInfo.commandBufferCount = 1;
+        blueSubmitInfo.pCommandBuffers = &blueCommandBuffer;
+        
+        vkQueueSubmit(g_graphicsQueue, 1, &blueSubmitInfo, VK_NULL_HANDLE);
+        vkQueueWaitIdle(g_graphicsQueue);
+        
+        vkFreeCommandBuffers(g_device, g_commandPool, 1, &blueCommandBuffer);
+        vkDestroyBuffer(g_device, blueStagingBuffer, nullptr);
+        vkFreeMemory(g_device, blueStagingBufferMemory, nullptr);
 
         // 19. Line Buffer
         createBuffer(g_lineBufferSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, g_lineVertexBuffer, g_lineVertexMemory);
+        
+        // Create colored cube vertex buffer (similar to line buffer)
+        // Increased size to support multiple batches per frame (10MB per batch, up to 10 batches = 100MB)
+        VkDeviceSize coloredCubeBufferSize = 100 * 1024 * 1024; // 100MB for colored cubes (10 batches * 10MB each)
+        createBuffer(coloredCubeBufferSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, g_coloredCubeVertexBuffer, g_coloredCubeVertexMemory);
 
         // 20. ImGui Init
         VkDescriptorPoolSize imguiPoolSizes[] = {
@@ -1229,7 +1532,14 @@ extern "C" int heidic_init_renderer(GLFWwindow* window) {
 
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
-        ImGuiIO& io = ImGui::GetIO(); (void)io;
+        ImGuiIO& io = ImGui::GetIO();
+        
+        // Enable docking (requires ImGui 'docking' branch)
+        io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+        
+        // Set up .ini file path for layout persistence
+        io.IniFilename = "imgui_layout.ini";
+        
         ImGui::StyleColorsDark();
 
         ImGui_ImplGlfw_InitForVulkan(window, true);
@@ -1289,37 +1599,98 @@ extern "C" int heidic_is_mouse_button_pressed(GLFWwindow* window, int button) {
 }
 
 // FRAME CONTROL
+static uint32_t g_frameCounter = 0;  // Track frame number for debugging
+
 extern "C" void heidic_begin_frame() {
+    g_frameCounter++;
+    
+    // CRITICAL: Clear the begun windows set at the VERY START of each frame
+    // This MUST happen before any ImGui calls to prevent duplicate Begin() calls
+    g_begunWindowsThisFrame.clear();
+    g_windowsThatActuallyBegan.clear();
+    // Clear the open windows stack - any remaining windows from previous frame are invalid
+    while (!g_openWindowsStack.empty()) {
+        g_openWindowsStack.pop();
+    }
+    
+    // Frame counter for debugging (commented out to reduce log spam)
+    // std::cout << "[DEBUG] heidic_begin_frame: Frame #" << g_frameCounter << " - Cleared window tracking sets" << std::endl;
+    
     // Start ImGui Frame
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
+    
+    // Process pending combination editing start (deferred from previous frame to avoid same-frame conflicts)
+    if (g_pendingStartEditingId >= 0) {
+        g_editingCombinationId = g_pendingStartEditingId;
+        g_pendingStartEditingId = -1;
+        // Initialize buffer with current name
+        const char* current_name = heidic_format_combination_name(g_editingCombinationId);
+        strncpy(g_combinationNameBuffer, current_name, sizeof(g_combinationNameBuffer) - 1);
+        g_combinationNameBuffer[sizeof(g_combinationNameBuffer) - 1] = '\0';
+    }
 
     // Clear lines for this frame
     g_lineVertices.clear();
+    g_coloredCubeVertices.clear();
+    
+    // NOTE: Window tracking sets are now cleared at the VERY START of heidic_begin_frame()
+    // (moved above to ensure they're cleared before any ImGui calls)
 
+    // CRITICAL: Wait for the in-flight fence to ensure the previous frame's command buffer is done
+    // This MUST happen before we reset the fence or command buffer
     vkWaitForFences(g_device, 1, &g_inFlightFence, VK_TRUE, UINT64_MAX);
     
-    uint32_t imageIndex;
-    // Acquire next image using fence (required: either semaphore or fence must be non-NULL)
-    // We'll use imageIndex to select the correct semaphore for render-finished signal
-    vkResetFences(g_device, 1, &g_imageAvailableFence);
-    VkResult result = vkAcquireNextImageKHR(g_device, g_swapchain, UINT64_MAX, VK_NULL_HANDLE, g_imageAvailableFence, &imageIndex);
-    vkWaitForFences(g_device, 1, &g_imageAvailableFence, VK_TRUE, UINT64_MAX);
+    // Now that GPU is done, safely destroy any pending textures
+    if (g_pendingTextureImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(g_device, g_pendingTextureImageView, nullptr);
+        g_pendingTextureImageView = VK_NULL_HANDLE;
+    }
+    if (g_pendingTextureImage != VK_NULL_HANDLE) {
+        vkDestroyImage(g_device, g_pendingTextureImage, nullptr);
+        g_pendingTextureImage = VK_NULL_HANDLE;
+    }
+    if (g_pendingTextureImageMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(g_device, g_pendingTextureImageMemory, nullptr);
+        g_pendingTextureImageMemory = VK_NULL_HANDLE;
+    }
     
-    if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+    // Now it's safe to reset the fence since we've waited
+    vkResetFences(g_device, 1, &g_inFlightFence);
+    
+    uint32_t imageIndex;
+    // Acquire next image using the semaphore for the frame we'll use
+    // We'll use a single semaphore (index 0) for acquisition - it will be consumed in submit
+    VkResult result = vkAcquireNextImageKHR(g_device, g_swapchain, UINT64_MAX, 
+                                             g_imageAvailableSemaphores[0],  // Use semaphore for acquisition
+                                             VK_NULL_HANDLE,  // No fence
+                                             &imageIndex);
+    
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) {
+        g_commandBufferStarted = false;  // Command buffer not started due to early return
         return;
     }
     
-    // Use the actual imageIndex we got from acquire to select the correct semaphores
-    // This ensures each swapchain image uses its own semaphore (fixes validation error)
+    // Use the actual imageIndex we got from acquire
     g_currentFrame = imageIndex;
-    vkResetFences(g_device, 1, &g_inFlightFence);
+    
+    // Reset batch index for this frame
+    if (g_currentBatchIndex.size() > g_currentFrame) {
+        g_currentBatchIndex[g_currentFrame] = 0;
+    }
+    
+    // Now reset the command buffer for this frame (safe because we waited for the fence above)
     vkResetCommandBuffer(g_commandBuffers[g_currentFrame], 0);
     
     VkCommandBuffer cb = g_commandBuffers[g_currentFrame];
     VkCommandBufferBeginInfo beginInfo = {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-    vkBeginCommandBuffer(cb, &beginInfo);
+    VkResult beginResult = vkBeginCommandBuffer(cb, &beginInfo);
+    if (beginResult != VK_SUCCESS) {
+        g_commandBufferStarted = false;
+        return;  // Failed to start command buffer
+    }
+    g_commandBufferStarted = true;  // Mark that command buffer was successfully started
     
     VkRenderPassBeginInfo renderPassInfo = {};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -1347,7 +1718,54 @@ extern "C" void heidic_begin_frame() {
 }
 
 extern "C" void heidic_end_frame() {
+    // If command buffer wasn't started this frame, don't try to record commands
+    if (!g_commandBufferStarted) {
+        return;
+    }
+    
     VkCommandBuffer cb = g_commandBuffers[g_currentFrame];
+    
+    // Draw Colored Cubes (batched)
+    // This is called at the end of frame to draw any remaining batched cubes
+    // Can also be called mid-frame via heidic_flush_colored_cubes() to flush current batch
+    if (!g_coloredCubeVertices.empty()) {
+        size_t vertexCount = g_coloredCubeVertices.size();
+        size_t bufferSize = sizeof(Vertex) * vertexCount;
+        
+        // Ensure buffer is large enough
+        if (bufferSize > 10 * 1024 * 1024) {
+            // Buffer too large, skip drawing this frame
+            g_coloredCubeVertices.clear();
+        } else {
+            void* data;
+            vkMapMemory(g_device, g_coloredCubeVertexMemory, 0, bufferSize, 0, &data);
+            memcpy(data, g_coloredCubeVertices.data(), bufferSize);
+            vkUnmapMemory(g_device, g_coloredCubeVertexMemory);
+
+            // Bind pipeline and descriptor sets
+            vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_pipeline);
+            vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_pipelineLayout, 0, 1, &g_descriptorSets[g_currentFrame], 0, nullptr);
+            
+            // Push Identity Model Matrix (vertices are already transformed)
+            PushConsts push;
+            push.model = glm::mat4(1.0f);
+            vkCmdPushConstants(cb, g_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConsts), &push);
+
+            VkBuffer vertexBuffers[] = {g_coloredCubeVertexBuffer};
+            VkDeviceSize offsets[] = {0};
+            vkCmdBindVertexBuffers(cb, 0, 1, vertexBuffers, offsets);
+            
+            // Draw all batched cubes (they all use the same texture that was loaded when batch started)
+            vkCmdDraw(cb, static_cast<uint32_t>(vertexCount), 1, 0, 0);
+        }
+        
+        g_coloredCubeVertices.clear();
+    }
+    
+    // Ensure default white texture is loaded after drawing textured cubes
+    // This prevents texture color from affecting non-textured geometry drawn after
+    // (like lines, wireframes, etc. that use UVs 0,0)
+    heidic_load_texture_for_rendering("default.bmp");
     
     // Draw Lines
     if (!g_lineVertices.empty()) {
@@ -1373,32 +1791,51 @@ extern "C" void heidic_end_frame() {
         vkCmdDraw(cb, static_cast<uint32_t>(g_lineVertices.size()), 1, 0, 0);
     }
 
+    // CRITICAL: Ensure all windows are properly closed before rendering
+    // If there are any windows on the stack that weren't closed, close them now
+    // This prevents ImGui from being in an invalid state when Render() is called
+    while (!g_openWindowsStack.empty()) {
+        std::string windowName = g_openWindowsStack.top();
+        // Silently close windows without warning spam
+        g_openWindowsStack.pop();
+        ImGui::End();
+    }
+    
     // Render ImGui
     ImGui::Render();
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cb);
     
     vkCmdEndRenderPass(cb);
-    vkEndCommandBuffer(cb);
+    VkResult endResult = vkEndCommandBuffer(cb);
+    if (endResult != VK_SUCCESS) {
+        g_commandBufferStarted = false;
+        return;  // Failed to end command buffer
+    }
+    g_commandBufferStarted = false;  // Reset flag for next frame
     
     VkSubmitInfo submitInfo = {};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    // Don't wait on a semaphore since we didn't use one with acquire
-    // The fence already ensures the image is ready
-    submitInfo.waitSemaphoreCount = 0;
-    submitInfo.pWaitSemaphores = nullptr;
-    submitInfo.pWaitDstStageMask = nullptr;
+    // Wait for image acquisition semaphore (we used semaphore[0] for acquire)
+    // This ensures the image is ready before we start rendering
+    VkSemaphore waitSemaphores[] = {g_imageAvailableSemaphores[0]};
+    VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+    submitInfo.waitSemaphoreCount = 1;
+    submitInfo.pWaitSemaphores = waitSemaphores;
+    submitInfo.pWaitDstStageMask = waitStages;
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &cb;
+    // Signal the render-finished semaphore for the current frame
     VkSemaphore signalSemaphores[] = {g_renderFinishedSemaphores[g_currentFrame]};
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pSignalSemaphores = signalSemaphores;
     
+    // Submit with fence - this fence will be signaled when the command buffer completes
     vkQueueSubmit(g_graphicsQueue, 1, &submitInfo, g_inFlightFence);
     
     VkPresentInfoKHR presentInfo = {};
     presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     presentInfo.waitSemaphoreCount = 1;
-    presentInfo.pWaitSemaphores = signalSemaphores;
+    presentInfo.pWaitSemaphores = signalSemaphores;  // Wait for render to finish before presenting
     VkSwapchainKHR swapchains[] = {g_swapchain};
     presentInfo.swapchainCount = 1;
     presentInfo.pSwapchains = swapchains;
@@ -1424,6 +1861,247 @@ extern "C" void heidic_draw_cube(float x, float y, float z, float rx, float ry, 
     vkCmdPushConstants(g_commandBuffers[g_currentFrame], g_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConsts), &push);
     
     vkCmdDraw(g_commandBuffers[g_currentFrame], g_cubeVertexCount, 1, 0, 0);
+}
+
+// DRAW CUBE WITH GREY COLOR (uses pre-created grey cube buffer)
+extern "C" void heidic_draw_cube_grey(float x, float y, float z, float rx, float ry, float rz, float sx, float sy, float sz) {
+    // Ensure white default texture is loaded for non-textured geometry
+    // This prevents texture color from tinting non-textured geometry
+    // Always load default texture before drawing non-textured geometry to prevent tinting
+    heidic_load_texture_for_rendering("default.bmp");
+    
+    // Construct Model Matrix
+    glm::mat4 model = glm::mat4(1.0f);
+    model = glm::translate(model, glm::vec3(x, y, z));
+    model = glm::rotate(model, glm::radians(rx), glm::vec3(1.0f, 0.0f, 0.0f));
+    model = glm::rotate(model, glm::radians(ry), glm::vec3(0.0f, 1.0f, 0.0f));
+    model = glm::rotate(model, glm::radians(rz), glm::vec3(0.0f, 0.0f, 1.0f));
+    model = glm::scale(model, glm::vec3(sx, sy, sz));
+    
+    PushConsts push = {model};
+    VkCommandBuffer cb = g_commandBuffers[g_currentFrame];
+    vkCmdPushConstants(cb, g_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConsts), &push);
+    
+    VkBuffer vertexBuffers[] = {g_greyCubeVertexBuffer};
+    VkDeviceSize offsets[] = {0};
+    vkCmdBindVertexBuffers(cb, 0, 1, vertexBuffers, offsets);
+    
+    vkCmdDraw(cb, g_greyCubeVertexCount, 1, 0, 0);
+}
+
+// DRAW CUBE WITH BLUE COLOR (uses pre-created blue cube buffer)
+extern "C" void heidic_draw_cube_blue(float x, float y, float z, float rx, float ry, float rz, float sx, float sy, float sz) {
+    // Construct Model Matrix
+    glm::mat4 model = glm::mat4(1.0f);
+    model = glm::translate(model, glm::vec3(x, y, z));
+    model = glm::rotate(model, glm::radians(rx), glm::vec3(1.0f, 0.0f, 0.0f));
+    model = glm::rotate(model, glm::radians(ry), glm::vec3(0.0f, 1.0f, 0.0f));
+    model = glm::rotate(model, glm::radians(rz), glm::vec3(0.0f, 0.0f, 1.0f));
+    model = glm::scale(model, glm::vec3(sx, sy, sz));
+    
+    PushConsts push = {model};
+    VkCommandBuffer cb = g_commandBuffers[g_currentFrame];
+    vkCmdPushConstants(cb, g_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConsts), &push);
+    
+    VkBuffer vertexBuffers[] = {g_blueCubeVertexBuffer};
+    VkDeviceSize offsets[] = {0};
+    vkCmdBindVertexBuffers(cb, 0, 1, vertexBuffers, offsets);
+    
+    vkCmdDraw(cb, g_blueCubeVertexCount, 1, 0, 0);
+}
+
+// DRAW CUBE WITH CUSTOM RGB COLOR (batched system, similar to lines)
+// Note: Uses proper UVs for texture, vertex color acts as tint
+extern "C" void heidic_draw_cube_colored(float x, float y, float z, float rx, float ry, float rz, float sx, float sy, float sz, float r, float g, float b) {
+    // Create cube vertices with proper UVs and color tint (unit cube at origin)
+    std::vector<Vertex> cubeVertices = {
+        // Front face - proper UVs (0,0 to 1,1), color as tint
+        {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {r, g, b}},
+        {{ 0.5f, -0.5f,  0.5f}, {1.0f, 0.0f}, {r, g, b}},
+        {{ 0.5f,  0.5f,  0.5f}, {1.0f, 1.0f}, {r, g, b}},
+        {{ 0.5f,  0.5f,  0.5f}, {1.0f, 1.0f}, {r, g, b}},
+        {{-0.5f,  0.5f,  0.5f}, {0.0f, 1.0f}, {r, g, b}},
+        {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {r, g, b}},
+        // Back face
+        {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f}, {r, g, b}},
+        {{-0.5f,  0.5f, -0.5f}, {1.0f, 1.0f}, {r, g, b}},
+        {{ 0.5f,  0.5f, -0.5f}, {0.0f, 1.0f}, {r, g, b}},
+        {{ 0.5f,  0.5f, -0.5f}, {0.0f, 1.0f}, {r, g, b}},
+        {{ 0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {r, g, b}},
+        {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f}, {r, g, b}},
+        // Top face
+        {{-0.5f,  0.5f, -0.5f}, {0.0f, 1.0f}, {r, g, b}},
+        {{-0.5f,  0.5f,  0.5f}, {0.0f, 0.0f}, {r, g, b}},
+        {{ 0.5f,  0.5f,  0.5f}, {1.0f, 0.0f}, {r, g, b}},
+        {{ 0.5f,  0.5f,  0.5f}, {1.0f, 0.0f}, {r, g, b}},
+        {{ 0.5f,  0.5f, -0.5f}, {1.0f, 1.0f}, {r, g, b}},
+        {{-0.5f,  0.5f, -0.5f}, {0.0f, 1.0f}, {r, g, b}},
+        // Bottom face
+        {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {r, g, b}},
+        {{ 0.5f, -0.5f, -0.5f}, {1.0f, 0.0f}, {r, g, b}},
+        {{ 0.5f, -0.5f,  0.5f}, {1.0f, 1.0f}, {r, g, b}},
+        {{ 0.5f, -0.5f,  0.5f}, {1.0f, 1.0f}, {r, g, b}},
+        {{-0.5f, -0.5f,  0.5f}, {0.0f, 1.0f}, {r, g, b}},
+        {{-0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {r, g, b}},
+        // Right face
+        {{ 0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {r, g, b}},
+        {{ 0.5f,  0.5f, -0.5f}, {0.0f, 1.0f}, {r, g, b}},
+        {{ 0.5f,  0.5f,  0.5f}, {1.0f, 1.0f}, {r, g, b}},
+        {{ 0.5f,  0.5f,  0.5f}, {1.0f, 1.0f}, {r, g, b}},
+        {{ 0.5f, -0.5f,  0.5f}, {1.0f, 0.0f}, {r, g, b}},
+        {{ 0.5f, -0.5f, -0.5f}, {0.0f, 0.0f}, {r, g, b}},
+        // Left face
+        {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f}, {r, g, b}},
+        {{-0.5f, -0.5f,  0.5f}, {0.0f, 0.0f}, {r, g, b}},
+        {{-0.5f,  0.5f,  0.5f}, {0.0f, 1.0f}, {r, g, b}},
+        {{-0.5f,  0.5f,  0.5f}, {0.0f, 1.0f}, {r, g, b}},
+        {{-0.5f,  0.5f, -0.5f}, {1.0f, 1.0f}, {r, g, b}},
+        {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f}, {r, g, b}}
+    };
+    
+    // Construct Model Matrix and transform vertices
+    glm::mat4 model = glm::mat4(1.0f);
+    model = glm::translate(model, glm::vec3(x, y, z));
+    model = glm::rotate(model, glm::radians(rx), glm::vec3(1.0f, 0.0f, 0.0f));
+    model = glm::rotate(model, glm::radians(ry), glm::vec3(0.0f, 1.0f, 0.0f));
+    model = glm::rotate(model, glm::radians(rz), glm::vec3(0.0f, 0.0f, 1.0f));
+    model = glm::scale(model, glm::vec3(sx, sy, sz));
+    
+    // Transform vertices to world space and add to batch
+    for (const auto& v : cubeVertices) {
+        glm::vec4 worldPos = model * glm::vec4(v.pos[0], v.pos[1], v.pos[2], 1.0f);
+        Vertex transformed;
+        transformed.pos[0] = worldPos.x;
+        transformed.pos[1] = worldPos.y;
+        transformed.pos[2] = worldPos.z;
+        transformed.uv[0] = v.uv[0];
+        transformed.uv[1] = v.uv[1];
+        transformed.color[0] = v.color[0];
+        transformed.color[1] = v.color[1];
+        transformed.color[2] = v.color[2];
+        g_coloredCubeVertices.push_back(transformed);
+    }
+}
+
+// Flush current batch of colored cubes (draw them immediately and clear the batch)
+// This allows batching cubes by texture - flush when texture changes
+extern "C" void heidic_flush_colored_cubes() {
+    if (!g_commandBufferStarted) {
+        return;  // Can't draw if command buffer isn't started
+    }
+    
+    if (g_coloredCubeVertices.empty()) {
+        return;  // Nothing to draw
+    }
+    
+    VkCommandBuffer cb = g_commandBuffers[g_currentFrame];
+    size_t vertexCount = g_coloredCubeVertices.size();
+    size_t bufferSize = sizeof(Vertex) * vertexCount;
+    
+    // Ensure buffer is large enough
+    if (bufferSize > 10 * 1024 * 1024) {
+        // Buffer too large, skip drawing
+        g_coloredCubeVertices.clear();
+        return;
+    }
+    
+    // Get batch index FIRST (before calculating offset)
+    VkDescriptorSet currentSet = VK_NULL_HANDLE;
+    int batchIndex = -1;
+    
+    if (g_currentFrame < g_batchDescriptorSets.size() && 
+        g_currentBatchIndex[g_currentFrame] < MAX_TEXTURE_SWITCHES_PER_FRAME) {
+        
+        batchIndex = g_currentBatchIndex[g_currentFrame];
+        currentSet = g_batchDescriptorSets[g_currentFrame][batchIndex];
+    } else {
+        // Fallback - use default descriptor set
+        if (g_currentFrame < g_descriptorSets.size()) {
+            currentSet = g_descriptorSets[g_currentFrame];
+        }
+        batchIndex = 0; // Use offset 0 for fallback
+    }
+    
+    // Calculate offset for this batch (each batch writes to a different part of the buffer)
+    // Each batch gets 10MB of space to avoid overwriting
+    VkDeviceSize batchOffset = batchIndex * (10 * 1024 * 1024); // 10MB per batch
+    VkDeviceSize maxOffset = batchOffset + bufferSize;
+    VkDeviceSize totalBufferSize = 100 * 1024 * 1024; // Total buffer size (100MB = 10 batches max)
+    
+    // Ensure we don't exceed buffer bounds
+    if (maxOffset > totalBufferSize || batchIndex >= 10) {
+        std::cerr << "[EDEN] Warning: Batch offset would exceed buffer, using offset 0 (may cause overwrite)" << std::endl;
+        batchOffset = 0;
+    }
+    
+    void* data;
+    vkMapMemory(g_device, g_coloredCubeVertexMemory, batchOffset, bufferSize, 0, &data);
+    memcpy(data, g_coloredCubeVertices.data(), bufferSize);
+    vkUnmapMemory(g_device, g_coloredCubeVertexMemory);
+    
+    // CRITICAL: Update descriptor set BEFORE binding it
+    // We can safely update it during command buffer recording as long as we update BEFORE binding
+    if (g_textureImageView != VK_NULL_HANDLE) {
+        VkDescriptorImageInfo imageInfo = {};
+        imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfo.imageView = g_textureImageView;
+        imageInfo.sampler = g_textureSampler;
+        
+        VkWriteDescriptorSet write = {};
+        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        write.dstSet = currentSet;
+        write.dstBinding = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.descriptorCount = 1;
+        write.pImageInfo = &imageInfo;
+        
+        // Update the descriptor set (this is safe because we haven't bound it yet)
+        vkUpdateDescriptorSets(g_device, 1, &write, 0, nullptr);
+        
+        // Get texture name from cache
+        std::string texName = "unknown";
+        for (const auto& pair : g_textureCache) {
+            if (pair.second.view == g_textureImageView) {
+                texName = pair.first;
+                break;
+            }
+        }
+        std::cout << "[DEBUG FLUSH] Batch #" << batchIndex 
+                  << ", Texture: '" << texName 
+                  << "', Vertices: " << vertexCount 
+                  << ", DescriptorSet: " << (void*)currentSet << std::endl;
+    }
+    
+    // Increment batch index AFTER we've set up this batch's descriptor set
+    g_currentBatchIndex[g_currentFrame]++;
+
+    // Bind pipeline and descriptor sets
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_pipeline);
+    if (currentSet != VK_NULL_HANDLE) {
+        vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_pipelineLayout, 0, 1, &currentSet, 0, nullptr);
+    }
+    
+    // Push Identity Model Matrix (vertices are already transformed)
+    PushConsts push;
+    push.model = glm::mat4(1.0f);
+    vkCmdPushConstants(cb, g_pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConsts), &push);
+
+    // Use the same batch offset we calculated above
+    VkBuffer vertexBuffers[] = {g_coloredCubeVertexBuffer};
+    VkDeviceSize offsets[] = {batchOffset};
+    vkCmdBindVertexBuffers(cb, 0, 1, vertexBuffers, offsets);
+    
+    // Draw current batch
+    std::cout << "[DEBUG FLUSH] Drawing " << vertexCount << " vertices at offset " << batchOffset 
+              << " (batch #" << batchIndex << ") with descriptor set " << (void*)currentSet << std::endl;
+    vkCmdDraw(cb, static_cast<uint32_t>(vertexCount), 1, 0, 0);
+    
+    // Clear the batch for next texture group
+    std::cout << "[DEBUG FLUSH] Clearing vertex batch (had " << g_coloredCubeVertices.size() << " vertices)" << std::endl;
+    g_coloredCubeVertices.clear();
+    
+    // Note: We don't reset to default texture here because the next cube will load its own texture
+    // The caller is responsible for loading the appropriate texture before the next batch
 }
 
 // DRAW LINES
@@ -1534,17 +2212,106 @@ extern "C" void heidic_set_video_mode(int windowed) {
 // IMGUI WRAPPERS
 extern "C" void heidic_imgui_init(GLFWwindow* window) {
 }
-extern "C" void heidic_imgui_begin(const char* name) {
+extern "C" int heidic_imgui_begin(const char* name) {
+    // CRITICAL FIX: Prevent calling Begin() twice on the same window in the same frame
+    // This is the root cause of the g.WithinFrameScope assertion
+    std::string windowName(name);
+    
+    // Check BEFORE calling Begin() to prevent duplicate calls
+    if (g_begunWindowsThisFrame.count(windowName) > 0) {
+        // Window already begun - don't add to set again, just return 0
+        // This prevents the HEIDIC code from rendering, and End() won't be called (which is correct)
+        return 0;  // Return 0 to indicate window is not open - HEIDIC code should skip rendering
+    }
+    
+    // Track that this window will be begun (BEFORE calling Begin to catch duplicates)
+    g_begunWindowsThisFrame.insert(windowName);
+    
+    // Use Begin with default flags - windows will be dockable when dockspace is enabled
+    bool windowOpen = ImGui::Begin(name);
+    
+    // CRITICAL: Always push to stack if Begin() was called, even if window is closed
+    // ImGui requires matching End() for every Begin(), regardless of open state
+    // This is especially important for docked windows which may create internal child windows
+    g_windowsThatActuallyBegan.insert(windowName);
+    g_openWindowsStack.push(windowName);
+    
+    // DEBUG: Reduced logging (uncomment if needed)
+    // std::cout << "[DEBUG] heidic_imgui_begin: '" << name << "' - ImGui::Begin() completed (open=" 
+    //           << (windowOpen ? 1 : 0) << ")" << std::endl;
+    
+    // Dock ID tracking removed - no longer needed without Debug Panel
+    
+    return windowOpen ? 1 : 0;  // Return 1 if window is open, 0 if closed
+}
+
+// Helper to begin a window that should dock with another window
+extern "C" void heidic_imgui_begin_docked_with(const char* name, const char* dock_with_name) {
+    // DEBUG: Log every window begin to find which one triggers the assertion
+    std::cout << "[DEBUG] heidic_imgui_begin_docked_with: '" << name << "' docked with '" << dock_with_name 
+              << "' - About to call ImGui::Begin()" << std::endl;
+    std::cout.flush();
+    
+    // Dock ID tracking removed - no longer needed without Debug Panel
     ImGui::Begin(name);
+    
+    std::cout << "[DEBUG] heidic_imgui_begin_docked_with: '" << name << "' - ImGui::Begin() completed" << std::endl;
+    std::cout.flush();
 }
 extern "C" void heidic_imgui_end() {
-    ImGui::End();
+    // CRITICAL: Always call End() if there's a window on the stack
+    // ImGui requires matching End() for every Begin(), even if the window was closed
+    // This is especially important for docked windows which may create internal child windows
+    if (!g_openWindowsStack.empty()) {
+        g_openWindowsStack.pop();
+        ImGui::End();
+    } else {
+        // This should not happen if HEIDIC code is correct, but log it for debugging
+        std::cout << "[WARNING] heidic_imgui_end: Called but no window on stack! This might indicate a missing Begin() call." << std::endl;
+        std::cout.flush();
+        // Still try to call End() - ImGui might handle it gracefully
+        ImGui::End();
+    }
 }
 extern "C" void heidic_imgui_text(const char* text) {
     ImGui::Text("%s", text);
 }
 extern "C" void heidic_imgui_text_float(const char* label, float value) {
     ImGui::Text("%s: %.3f", label, value);
+}
+// C++ overload for std::string (for HEIDIC string type)
+void heidic_imgui_text_str(const std::string& text) {
+    ImGui::Text("%s", text.c_str());
+}
+// Wrapper for HEIDIC code - accepts std::string (HEIDIC string type compiles to std::string)
+// Must be extern "C" to be linkable from generated C++ code
+extern "C" void heidic_imgui_text_str_wrapper(const char* text) {
+    ImGui::Text("%s", text);
+}
+
+// Text with color (RGBA, 0.0-1.0 range)
+extern "C" void heidic_imgui_text_colored(const char* text, float r, float g, float b, float a) {
+    ImGui::TextColored(ImVec4(r, g, b, a), "%s", text);
+}
+
+// Bold text - use brighter color to simulate bold (since we don't have a bold font loaded)
+extern "C" void heidic_imgui_text_bold(const char* text) {
+    // Use bright white/yellow color to make selected text stand out
+    ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.5f, 1.0f), "%s", text);
+}
+// Format cube name like "cube_001", "cube_002", etc.
+// Returns a static buffer - valid until next call
+extern "C" const char* heidic_format_cube_name(int index) {
+    static char buffer[64];
+    snprintf(buffer, sizeof(buffer), "cube_%03d", index + 1); // +1 so first cube is 001, not 000
+    return buffer;
+}
+
+// Format cube name with 5-digit index (cube_00001, cube_00002, etc.)
+extern "C" const char* heidic_format_cube_name_with_index(int index) {
+    static char buffer[64];
+    snprintf(buffer, sizeof(buffer), "cube_%05d", index); // 5 digits with leading zeros
+    return buffer;
 }
 extern "C" bool heidic_imgui_drag_float3(const char* label, Vec3* v, float speed) {
     return ImGui::DragFloat3(label, (float*)v, speed);
@@ -1563,6 +2330,188 @@ extern "C" float heidic_get_fps() {
     return io.Framerate;
 }
 
+// ImGui Menu Bar Functions
+extern "C" int heidic_imgui_begin_main_menu_bar() {
+    return ImGui::BeginMainMenuBar() ? 1 : 0;
+}
+
+extern "C" void heidic_imgui_end_main_menu_bar() {
+    ImGui::EndMainMenuBar();
+}
+
+// ImGui Dockspace Functions (requires ImGui 'docking' branch)
+extern "C" void heidic_imgui_setup_dockspace() {
+    // Get main viewport
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGuiID dockspace_id = ImGui::GetID("MyDockSpace");
+    
+    // Account for menu bar height
+    float menu_bar_height = ImGui::GetFrameHeight();
+    ImVec2 dockspace_pos = ImVec2(viewport->Pos.x, viewport->Pos.y + menu_bar_height);
+    ImVec2 dockspace_size = ImVec2(viewport->Size.x, viewport->Size.y - menu_bar_height);
+    
+    // Set up the dockspace window to fill viewport minus menu bar
+    ImGui::SetNextWindowPos(dockspace_pos);
+    ImGui::SetNextWindowSize(dockspace_size);
+    ImGui::SetNextWindowViewport(viewport->ID);
+    
+    // Make the window background completely transparent
+    ImGui::SetNextWindowBgAlpha(0.0f);
+    
+    // Window flags to make it a background dockspace
+    ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar |
+                                    ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+                                    ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                                    ImGuiWindowFlags_NoNavFocus;
+    
+    // Style adjustments for seamless docking
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    
+    // Begin the dockspace window
+    ImGui::Begin("DockSpace Window", nullptr, window_flags);
+    ImGui::PopStyleVar(3);
+    
+    // Create the dockspace with PassthruCentralNode to allow 3D rendering to show through
+    // This makes the central dock node transparent so the Vulkan render pass shows through
+    ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
+    
+    ImGui::End();
+}
+
+extern "C" void heidic_imgui_load_layout(const char* ini_path) {
+    if (ini_path && ini_path[0] != '\0') {
+        ImGui::LoadIniSettingsFromDisk(ini_path);
+    } else {
+        // Default to imgui_layout.ini in current directory
+        ImGui::LoadIniSettingsFromDisk("imgui_layout.ini");
+    }
+}
+
+extern "C" void heidic_imgui_save_layout(const char* ini_path) {
+    if (ini_path && ini_path[0] != '\0') {
+        ImGui::SaveIniSettingsToDisk(ini_path);
+    } else {
+        // Default to imgui_layout.ini in current directory
+        ImGui::SaveIniSettingsToDisk("imgui_layout.ini");
+    }
+}
+
+extern "C" int heidic_imgui_begin_menu(const char* label) {
+    return ImGui::BeginMenu(label) ? 1 : 0;
+}
+
+extern "C" void heidic_imgui_end_menu() {
+    ImGui::EndMenu();
+}
+
+extern "C" int heidic_imgui_menu_item(const char* label) {
+    return ImGui::MenuItem(label) ? 1 : 0;
+}
+
+extern "C" void heidic_imgui_separator() {
+    ImGui::Separator();
+}
+
+// ImGui Button
+extern "C" int heidic_imgui_button(const char* label) {
+    return ImGui::Button(label) ? 1 : 0;
+}
+
+// Collapsible header (returns 1 if expanded, 0 if collapsed, toggles on click)
+extern "C" int heidic_imgui_collapsing_header(const char* label) {
+    return ImGui::CollapsingHeader(label) ? 1 : 0;
+}
+extern "C" void heidic_imgui_same_line() {
+    ImGui::SameLine();
+}
+extern "C" void heidic_imgui_push_id(int id) {
+    ImGui::PushID(id);
+}
+extern "C" void heidic_imgui_pop_id() {
+    ImGui::PopID();
+}
+
+// C++ overload for std::string (for direct C++ calls)
+int heidic_imgui_button_str(const std::string& label) {
+    return ImGui::Button(label.c_str()) ? 1 : 0;
+}
+
+// Wrapper for HEIDIC code (extern "C" accepts const char*)
+extern "C" int heidic_imgui_button_str_wrapper(const char* label) {
+    if (!label) return 0;
+    return ImGui::Button(label) ? 1 : 0;
+}
+
+
+// ImGui Input Text (returns 1 if text was modified)
+extern "C" int heidic_imgui_input_text(const char* label, char* buffer, int buffer_size) {
+    return ImGui::InputText(label, buffer, buffer_size) ? 1 : 0;
+}
+// Helper function: converts std::string to const char* (for HEIDIC string type)
+// This is a workaround because HEIDIC's codegen generates extern "C" forward declarations
+extern "C" const char* heidic_string_to_char_ptr(const char* str) {
+    return str;  // Just return as-is - the actual conversion happens in C++ overload
+}
+
+// ImGui Selectable (returns 1 if clicked) - extern "C" version (matches HEIDIC forward declarations)
+extern "C" int heidic_imgui_selectable_str(const char* label) {
+    return heidic_imgui_selectable(label);
+}
+
+// Selectable with color (for combined cubes - red)
+extern "C" int heidic_imgui_selectable_colored(const char* label, float r, float g, float b, float a) {
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(r, g, b, a));
+    bool result = ImGui::Selectable(label);
+    ImGui::PopStyleColor();
+    return result ? 1 : 0;
+}
+
+// Image button for texture previews (with optional tint color)
+extern "C" int32_t heidic_imgui_image_button(const char* str_id, int64_t texture_id, float size_x, float size_y, float tint_r, float tint_g, float tint_b, float tint_a) {
+    if (texture_id == 0) return 0;  // Check before casting
+    ImTextureRef tex_ref = (ImTextureRef)(uintptr_t)texture_id;
+    ImVec4 tint_col(tint_r, tint_g, tint_b, tint_a);
+    return ImGui::ImageButton(str_id, tex_ref, ImVec2(size_x, size_y), ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), tint_col) ? 1 : 0;
+}
+
+// C++ overload for std::string (this will be called when HEIDIC passes std::string)
+// Note: This needs to be visible to the generated code, but since the header isn't included,
+// we'll need to include it manually or make the extern "C" version work with std::string
+int heidic_imgui_selectable_str(const std::string& label) {
+    return heidic_imgui_selectable_str(label.c_str());  // Call the extern "C" version
+}
+
+// ImGui Selectable (returns 1 if clicked) - extern "C" version
+extern "C" int heidic_imgui_selectable(const char* label) {
+    // Use Selectable with default flags (None) - it will automatically span available width
+    // The second parameter is "selected" state (false = not selected)
+    // Store the result in a way that doesn't trigger frame scope checks
+    bool clicked = ImGui::Selectable(label, false);
+    return clicked ? 1 : 0;
+}
+// Check if last item was clicked (for use after Text or other widgets)
+extern "C" int heidic_imgui_is_item_clicked() {
+    return ImGui::IsItemClicked() ? 1 : 0;
+}
+// Check if Enter key is pressed (for confirming edits)
+// Uses GLFW instead of ImGui to avoid frame scope requirement
+extern "C" int heidic_imgui_is_key_enter_pressed() {
+    if (!g_mainWindow) return 0;
+    // GLFW key codes: Enter = 257, Keypad Enter = 335
+    // Use numeric codes directly to avoid dependency on GLFW_KEY_* constants
+    return (glfwGetKey(g_mainWindow, 257) == GLFW_PRESS || 
+            glfwGetKey(g_mainWindow, 335) == GLFW_PRESS) ? 1 : 0;
+}
+// Check if Escape key is pressed (for canceling edits)
+// Uses GLFW instead of ImGui to avoid frame scope requirement
+extern "C" int heidic_imgui_is_key_escape_pressed() {
+    if (!g_mainWindow) return 0;
+    // GLFW key code: Escape = 256
+    return (glfwGetKey(g_mainWindow, 256) == GLFW_PRESS) ? 1 : 0;
+}
+
 // VECTOR OPERATIONS
 extern "C" Vec3 heidic_vec3(float x, float y, float z) {
     return Vec3(x, y, z);
@@ -1570,6 +2519,19 @@ extern "C" Vec3 heidic_vec3(float x, float y, float z) {
 
 extern "C" Vec3 heidic_vec3_add(Vec3 a, Vec3 b) {
     return Vec3(glm::vec3(a) + glm::vec3(b));
+}
+
+extern "C" Vec3 heidic_vec3_sub(Vec3 a, Vec3 b) {
+    return Vec3(glm::vec3(a) - glm::vec3(b));
+}
+
+extern "C" float heidic_vec3_distance(Vec3 a, Vec3 b) {
+    glm::vec3 diff = glm::vec3(a) - glm::vec3(b);
+    return glm::length(diff);
+}
+
+extern "C" Vec3 heidic_vec3_mul_scalar(Vec3 v, float s) {
+    return Vec3(glm::vec3(v) * s);
 }
 
 extern "C" Vec3 heidic_vec_copy(Vec3 src) {
@@ -1598,6 +2560,12 @@ extern "C" float heidic_sin(float radians) {
 }
 extern "C" float heidic_cos(float radians) {
     return std::cos(radians);
+}
+extern "C" float heidic_atan2(float y, float x) {
+    return std::atan2(y, x);
+}
+extern "C" float heidic_asin(float value) {
+    return std::asin(value);
 }
 
 // Mesh storage
@@ -1903,6 +2871,31 @@ extern "C" float heidic_get_mouse_scroll_y(GLFWwindow* window) {
     // We'll use it for zoom even if ImGui might have used it for scrolling panels
     // The game logic can decide whether to use it based on context (e.g., only in top-down mode)
     return io.MouseWheel;
+}
+
+// Get mouse delta (change in position since last frame)
+// Returns delta X (horizontal movement)
+extern "C" float heidic_get_mouse_delta_x(GLFWwindow* window) {
+    ImGuiIO& io = ImGui::GetIO();
+    return io.MouseDelta.x;
+}
+
+// Get mouse delta (change in position since last frame)
+// Returns delta Y (vertical movement)
+extern "C" float heidic_get_mouse_delta_y(GLFWwindow* window) {
+    ImGuiIO& io = ImGui::GetIO();
+    return io.MouseDelta.y;
+}
+
+// Set cursor mode: 0 = normal, 1 = hidden, 2 = disabled (captured)
+extern "C" void heidic_set_cursor_mode(GLFWwindow* window, int mode) {
+    if (mode == 0) {
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+    } else if (mode == 1) {
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_HIDDEN);
+    } else if (mode == 2) {
+        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    }
 }
 
 // Convert mouse screen position to normalized device coordinates (NDC)
@@ -2495,7 +3488,10 @@ extern "C" int heidic_gizmo_is_interacting() {
 struct CreatedCube {
     float x, y, z;
     float sx, sy, sz;  // size
+    float r, g, b;     // color
     int active;  // 1 = exists, 0 = deleted
+    int combination_id;  // -1 = no combination, >= 0 = combination ID
+    std::string texture_name;  // Texture filename (empty = use default)
 };
 
 static std::vector<CreatedCube> g_createdCubes;
@@ -2508,9 +3504,62 @@ extern "C" int heidic_create_cube(float x, float y, float z, float sx, float sy,
     cube.sx = sx;
     cube.sy = sy;
     cube.sz = sz;
+    cube.r = 1.0f;  // Default red
+    cube.g = 0.0f;
+    cube.b = 0.0f;
     cube.active = 1;
+    cube.combination_id = -1;  // No combination initially
+    cube.texture_name = "";  // No texture initially
     g_createdCubes.push_back(cube);
     return (int)(g_createdCubes.size() - 1);  // Return index
+}
+
+// Forward declarations
+extern "C" int heidic_create_cube_with_texture(float x, float y, float z, float sx, float sy, float sz, float r, float g, float b, const char* texture_name);
+extern "C" const char* heidic_get_selected_texture();
+
+extern "C" int heidic_create_cube_with_color(float x, float y, float z, float sx, float sy, float sz, float r, float g, float b) {
+    // Use selected texture if available, otherwise empty string (default texture)
+    // We'll get the selected texture via the getter function to avoid scope issues
+    const char* selected_texture = heidic_get_selected_texture();
+    std::string texture_name = (selected_texture && strlen(selected_texture) > 0) ? std::string(selected_texture) : "";
+    
+    // Debug: Print what texture we're using
+    std::cout << "[DEBUG] Creating cube with texture: '" << texture_name << "' at (" << x << ", " << y << ", " << z << ")" << std::endl;
+    std::cout.flush();
+    
+    return heidic_create_cube_with_texture(x, y, z, sx, sy, sz, r, g, b, texture_name.c_str());
+}
+
+extern "C" int heidic_create_cube_with_texture(float x, float y, float z, float sx, float sy, float sz, float r, float g, float b, const char* texture_name) {
+    CreatedCube cube;
+    cube.x = x;
+    cube.y = y;
+    cube.z = z;
+    cube.sx = sx;
+    cube.sy = sy;
+    cube.sz = sz;
+    cube.r = r;
+    cube.g = g;
+    cube.b = b;
+    cube.active = 1;
+    cube.combination_id = -1;  // No combination initially
+    cube.texture_name = texture_name ? std::string(texture_name) : "";  // Store texture name
+    
+    // Debug: Print cube creation details
+    std::cout << "[DEBUG] Pushing cube to vector. Current size: " << g_createdCubes.size() 
+              << ", texture: '" << cube.texture_name << "', pos: (" << x << ", " << y << ", " << z << ")" << std::endl;
+    std::cout.flush();
+    
+    g_createdCubes.push_back(cube);
+    int new_index = (int)(g_createdCubes.size() - 1);
+    
+    // Debug: Verify the cube was stored correctly
+    std::cout << "[DEBUG] Cube stored at index " << new_index 
+              << ", stored texture: '" << g_createdCubes[new_index].texture_name << "'" << std::endl;
+    std::cout.flush();
+    
+    return new_index;  // Return index
 }
 
 extern "C" int heidic_get_cube_count() {
@@ -2560,6 +3609,189 @@ extern "C" int heidic_get_cube_active(int index) {
     return g_createdCubes[index].active;
 }
 
+extern "C" float heidic_get_cube_r(int index) {
+    if (index < 0 || index >= (int)g_createdCubes.size()) return 1.0f;
+    return g_createdCubes[index].r;
+}
+
+extern "C" float heidic_get_cube_g(int index) {
+    if (index < 0 || index >= (int)g_createdCubes.size()) return 0.0f;
+    return g_createdCubes[index].g;
+}
+
+extern "C" float heidic_get_cube_b(int index) {
+    if (index < 0 || index >= (int)g_createdCubes.size()) return 0.0f;
+    return g_createdCubes[index].b;
+}
+
+// Get cube texture name
+extern "C" const char* heidic_get_cube_texture_name(int index) {
+    if (index < 0 || index >= (int)g_createdCubes.size()) return "";
+    return g_createdCubes[index].texture_name.c_str();
+}
+
+// Static variables for texture loading (declared here so they're accessible to texture functions)
+static std::string g_texturesBaseDir = "";  // Base directory for textures
+static std::string g_currentRenderingTextureName = "";  // Currently loaded texture name (for caching)
+
+// Load texture file and update global texture (for cube rendering)
+// Returns 1 on success, 0 on failure
+extern "C" int heidic_load_texture_for_rendering(const char* texture_name) {
+    if (!texture_name || strlen(texture_name) == 0) {
+        // Use default texture
+        return 1;  // Default is already loaded
+    }
+    
+    // Check texture cache first
+    auto cacheIt = g_textureCache.find(texture_name);
+    if (cacheIt != g_textureCache.end()) {
+        // Found in cache - use cached texture
+        g_textureImage = cacheIt->second.image;
+        g_textureImageMemory = cacheIt->second.memory;
+        g_textureImageView = cacheIt->second.view;
+        g_currentRenderingTextureName = texture_name;
+        return 1;  // Success - texture already loaded
+    }
+    
+    // Not in cache - load from disk
+    if (g_texturesBaseDir.empty()) {
+        heidic_load_texture_list();
+    }
+    if (g_texturesBaseDir.empty()) return 0;
+    
+    std::string full_path = g_texturesBaseDir + "/" + texture_name;
+    
+    // Load texture
+    int texWidth, texHeight, texChannels;
+    stbi_uc* pixels = stbi_load(full_path.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+    if (!pixels) {
+        std::cerr << "[EDEN] Failed to load texture for rendering: " << full_path << std::endl;
+        return 0;
+    }
+    
+    // Create new texture (similar to createTextureAndDescriptors)
+    VkDeviceSize imageSize = (VkDeviceSize)(texWidth) * texHeight * 4;
+    
+    // Create staging buffer
+    VkBuffer stagingBuffer;
+    VkDeviceMemory stagingBufferMemory;
+    createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
+    
+    void* data;
+    vkMapMemory(g_device, stagingBufferMemory, 0, imageSize, 0, &data);
+    memcpy(data, pixels, (size_t)imageSize);
+    vkUnmapMemory(g_device, stagingBufferMemory);
+    stbi_image_free(pixels);
+    
+    // Create image
+    VkImageCreateInfo imageInfo = {};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.extent.width = texWidth;
+    imageInfo.extent.height = texHeight;
+    imageInfo.extent.depth = 1;
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    
+    vkCreateImage(g_device, &imageInfo, nullptr, &g_textureImage);
+    
+    VkMemoryRequirements memRequirements;
+    vkGetImageMemoryRequirements(g_device, g_textureImage, &memRequirements);
+    
+    VkMemoryAllocateInfo allocInfo = {};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    
+    vkAllocateMemory(g_device, &allocInfo, nullptr, &g_textureImageMemory);
+    vkBindImageMemory(g_device, g_textureImage, g_textureImageMemory, 0);
+    
+    // Transition and copy
+    transitionImageLayout(g_textureImage, imageInfo.format, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    
+    VkCommandBufferAllocateInfo cbAlloc = {};
+    cbAlloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbAlloc.commandPool = g_commandPool;
+    cbAlloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbAlloc.commandBufferCount = 1;
+    
+    VkCommandBuffer cmd;
+    vkAllocateCommandBuffers(g_device, &cbAlloc, &cmd);
+    
+    VkCommandBufferBeginInfo beginInfo = {};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &beginInfo);
+    
+    VkBufferImageCopy region = {};
+    region.bufferOffset = 0;
+    region.bufferRowLength = 0;
+    region.bufferImageHeight = 0;
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.mipLevel = 0;
+    region.imageSubresource.baseArrayLayer = 0;
+    region.imageSubresource.layerCount = 1;
+    region.imageOffset = {0, 0, 0};
+    region.imageExtent = {(uint32_t)texWidth, (uint32_t)texHeight, 1};
+    
+    vkCmdCopyBufferToImage(cmd, stagingBuffer, g_textureImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    
+    vkEndCommandBuffer(cmd);
+    
+    VkSubmitInfo submitInfo = {};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmd;
+    vkQueueSubmit(g_graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(g_graphicsQueue);
+    
+    vkFreeCommandBuffers(g_device, g_commandPool, 1, &cmd);
+    
+    transitionImageLayout(g_textureImage, imageInfo.format, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    
+    vkDestroyBuffer(g_device, stagingBuffer, nullptr);
+    vkFreeMemory(g_device, stagingBufferMemory, nullptr);
+    
+    // Create image view
+    VkImageViewCreateInfo viewInfo = {};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = g_textureImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = imageInfo.format;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+    
+    VkImageView newTextureImageView;
+    vkCreateImageView(g_device, &viewInfo, nullptr, &newTextureImageView);
+    
+    // Store in cache (so we never destroy it)
+    TextureResource cached;
+    cached.image = g_textureImage;
+    cached.memory = g_textureImageMemory;
+    cached.view = newTextureImageView;
+    g_textureCache[texture_name] = cached;
+    
+    // Update global handles to point to cached texture
+    g_textureImageView = newTextureImageView;
+    g_currentRenderingTextureName = texture_name;
+    
+    // NOTE: We do NOT update descriptor sets here anymore.
+    // Instead, heidic_flush_colored_cubes() grabs a fresh descriptor set from the pool,
+    // updates it with g_textureImageView, and binds it for that specific batch.
+    // This avoids invalidating descriptor sets used by previous batches in the same command buffer.
+    
+    return 1;
+}
+
 extern "C" void heidic_set_cube_pos(int index, float x, float y, float z) {
     if (index < 0 || index >= (int)g_createdCubes.size()) return;
     g_createdCubes[index].x = x;
@@ -2591,7 +3823,1164 @@ extern "C" int heidic_find_next_active_cube_index(int start_index) {
     return -1;  // No more active cubes
 }
 
+// Random number generator (simple LCG)
+static uint32_t g_random_seed = 12345;
+
+extern "C" float heidic_random_float() {
+    // Linear congruential generator
+    g_random_seed = g_random_seed * 1103515245 + 12345;
+    return ((float)(g_random_seed & 0x7FFFFFFF)) / 2147483647.0f;  // 0.0 to 1.0
+}
+
 // Helper to convert i32 to f32 (for HEIDIC type system)
 extern "C" float heidic_int_to_float(int value) {
     return (float)value;
+}
+
+// Helper to convert f32 to i32 (for HEIDIC type system)
+extern "C" int heidic_float_to_int(float value) {
+    return (int)value;
+}
+
+// ========== COMBINATION SYSTEM ==========
+
+// Check if two cubes are touching/connected (within a small threshold)
+static bool cubesAreTouching(const CreatedCube& cube1, const CreatedCube& cube2) {
+    // Calculate AABB bounds for both cubes
+    float c1_min_x = cube1.x - cube1.sx * 0.5f;
+    float c1_max_x = cube1.x + cube1.sx * 0.5f;
+    float c1_min_y = cube1.y - cube1.sy * 0.5f;
+    float c1_max_y = cube1.y + cube1.sy * 0.5f;
+    float c1_min_z = cube1.z - cube1.sz * 0.5f;
+    float c1_max_z = cube1.z + cube1.sz * 0.5f;
+    
+    float c2_min_x = cube2.x - cube2.sx * 0.5f;
+    float c2_max_x = cube2.x + cube2.sx * 0.5f;
+    float c2_min_y = cube2.y - cube2.sy * 0.5f;
+    float c2_max_y = cube2.y + cube2.sy * 0.5f;
+    float c2_min_z = cube2.z - cube2.sz * 0.5f;
+    float c2_max_z = cube2.z + cube2.sz * 0.5f;
+    
+    // Check if cubes are touching/adjacent (within a small threshold)
+    const float threshold = 1.0f;  // 1 unit tolerance for touching
+    
+    // Check if cubes overlap on at least 2 axes and are adjacent on the third
+    // Two cubes are touching if:
+    // 1. They overlap on X and Y, and are adjacent on Z (stacked vertically)
+    // 2. They overlap on X and Z, and are adjacent on Y (stacked horizontally)
+    // 3. They overlap on Y and Z, and are adjacent on X (stacked side-by-side)
+    
+    bool overlap_x = (c1_max_x >= c2_min_x - threshold) && (c2_max_x >= c1_min_x - threshold);
+    bool overlap_y = (c1_max_y >= c2_min_y - threshold) && (c2_max_y >= c1_min_y - threshold);
+    bool overlap_z = (c1_max_z >= c2_min_z - threshold) && (c2_max_z >= c1_min_z - threshold);
+    
+    // Check if they're adjacent (touching) on each axis
+    bool adjacent_x = (std::abs(c1_max_x - c2_min_x) < threshold) || (std::abs(c2_max_x - c1_min_x) < threshold);
+    bool adjacent_y = (std::abs(c1_max_y - c2_min_y) < threshold) || (std::abs(c2_max_y - c1_min_y) < threshold);
+    bool adjacent_z = (std::abs(c1_max_z - c2_min_z) < threshold) || (std::abs(c2_max_z - c1_min_z) < threshold);
+    
+    // Cubes are touching if they overlap on 2 axes and are adjacent on the third
+    if (overlap_x && overlap_y && adjacent_z) return true;  // Stacked on Z axis
+    if (overlap_x && overlap_z && adjacent_y) return true;  // Stacked on Y axis
+    if (overlap_y && overlap_z && adjacent_x) return true;  // Stacked on X axis
+    
+    // Also check if they fully overlap (one inside the other or exactly same position)
+    if (overlap_x && overlap_y && overlap_z) return true;
+    
+    return false;
+}
+
+// Combination tracking
+static int g_nextCombinationId = 0;
+static std::map<int, bool> g_combinationExpanded;  // Track which combinations are expanded in outliner
+static std::map<int, std::string> g_combinationNames;  // Custom names for combinations (empty = use default)
+static std::map<int, std::string> g_combinationEditBuffers;  // Per-combination edit buffers
+
+// Multi-selection tracking
+static std::set<int> g_selectedCubeIndices;  // Set of selected cube storage indices
+
+// Texture swatch tracking
+static std::vector<std::string> g_textureList;  // List of texture filenames
+static std::string g_selectedTexture = "";  // Currently selected texture name
+static bool g_textureListLoaded = false;
+// Note: g_texturesBaseDir is declared earlier (before heidic_load_texture_for_rendering)
+
+// Texture preview cache (maps texture name to ImGui texture ID)
+struct TexturePreview {
+    VkDescriptorSet descriptorSet;
+    int width;
+    int height;
+};
+static std::map<std::string, TexturePreview> g_texturePreviews;
+
+// Multi-selection functions
+extern "C" void heidic_clear_selection() {
+    g_selectedCubeIndices.clear();
+}
+
+extern "C" void heidic_add_to_selection(int cube_storage_index) {
+    if (cube_storage_index >= 0) {
+        g_selectedCubeIndices.insert(cube_storage_index);
+    }
+}
+
+extern "C" void heidic_remove_from_selection(int cube_storage_index) {
+    g_selectedCubeIndices.erase(cube_storage_index);
+}
+
+extern "C" void heidic_toggle_selection(int cube_storage_index) {
+    if (cube_storage_index < 0) return;
+    auto it = g_selectedCubeIndices.find(cube_storage_index);
+    if (it != g_selectedCubeIndices.end()) {
+        g_selectedCubeIndices.erase(it);
+    } else {
+        g_selectedCubeIndices.insert(cube_storage_index);
+    }
+}
+
+extern "C" int heidic_is_cube_selected(int cube_storage_index) {
+    return g_selectedCubeIndices.find(cube_storage_index) != g_selectedCubeIndices.end() ? 1 : 0;
+}
+
+extern "C" int heidic_get_selection_count() {
+    return (int)g_selectedCubeIndices.size();
+}
+
+// Get all selected cube indices (returns array, caller must free)
+extern "C" int* heidic_get_selected_cube_indices() {
+    static std::vector<int> temp_buffer;
+    temp_buffer.clear();
+    for (int idx : g_selectedCubeIndices) {
+        temp_buffer.push_back(idx);
+    }
+    // Return pointer to static buffer (valid until next call)
+    static int result_buffer[1024];
+    for (size_t i = 0; i < temp_buffer.size() && i < 1024; i++) {
+        result_buffer[i] = temp_buffer[i];
+    }
+    return result_buffer;
+}
+
+// Combine all selected cubes (if they're connected)
+extern "C" void heidic_combine_selected_cubes() {
+    if (g_selectedCubeIndices.empty()) return;
+    
+    // Use union-find to group connected selected cubes
+    std::map<int, int> parent;
+    std::function<int(int)> find = [&](int x) -> int {
+        if (parent.find(x) == parent.end()) parent[x] = x;
+        if (parent[x] != x) parent[x] = find(parent[x]);
+        return parent[x];
+    };
+    auto unite = [&](int x, int y) {
+        int px = find(x);
+        int py = find(y);
+        if (px != py) parent[px] = py;
+    };
+    
+    // Check all pairs of selected cubes for connectivity
+    std::vector<int> selected_vec(g_selectedCubeIndices.begin(), g_selectedCubeIndices.end());
+    for (size_t i = 0; i < selected_vec.size(); i++) {
+        for (size_t j = i + 1; j < selected_vec.size(); j++) {
+            int idx1 = selected_vec[i];
+            int idx2 = selected_vec[j];
+            if (idx1 < 0 || idx1 >= (int)g_createdCubes.size()) continue;
+            if (idx2 < 0 || idx2 >= (int)g_createdCubes.size()) continue;
+            if (g_createdCubes[idx1].active != 1 || g_createdCubes[idx2].active != 1) continue;
+            
+            if (cubesAreTouching(g_createdCubes[idx1], g_createdCubes[idx2])) {
+                unite(idx1, idx2);
+            }
+        }
+    }
+    
+    // Assign combination IDs to each group
+    std::map<int, int> rootToCombinationId;
+    for (int idx : g_selectedCubeIndices) {
+        if (idx < 0 || idx >= (int)g_createdCubes.size()) continue;
+        if (g_createdCubes[idx].active != 1) continue;
+        if (g_createdCubes[idx].combination_id >= 0) continue;  // Skip already combined
+        
+        int root = find(idx);
+        if (rootToCombinationId.find(root) == rootToCombinationId.end()) {
+            int newId = g_nextCombinationId++;
+            rootToCombinationId[root] = newId;
+            g_combinationExpanded[newId] = false;
+        }
+        g_createdCubes[idx].combination_id = rootToCombinationId[root];
+    }
+    
+    // Clear selection after combining
+    g_selectedCubeIndices.clear();
+}
+
+// Load texture list from directory
+extern "C" void heidic_load_texture_list() {
+    if (g_textureListLoaded) return;  // Already loaded
+    
+    g_textureList.clear();
+    
+    // Try multiple paths
+    const char* base_paths[] = {
+        "examples/gateway_editor_v1/textures",
+        "../examples/gateway_editor_v1/textures",
+        "textures",
+        "."
+    };
+    
+    std::string textures_dir;
+    for (int i = 0; i < 4; i++) {
+        if (std::filesystem::exists(base_paths[i]) && std::filesystem::is_directory(base_paths[i])) {
+            textures_dir = base_paths[i];
+            break;
+        }
+    }
+    
+    if (textures_dir.empty()) {
+        std::cerr << "[EDEN] Could not find textures directory" << std::endl;
+        return;
+    }
+    
+    g_texturesBaseDir = textures_dir;
+    
+    // Iterate through directory and find all .bmp files
+    try {
+        for (const auto& entry : std::filesystem::directory_iterator(textures_dir)) {
+            if (entry.is_regular_file()) {
+                std::string filename = entry.path().filename().string();
+                // Check if it's a .bmp file (case insensitive)
+                std::string lower = filename;
+                std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+                if (lower.length() >= 4 && lower.substr(lower.length() - 4) == ".bmp") {
+                    g_textureList.push_back(filename);
+                }
+            }
+        }
+        
+        // Sort alphabetically
+        std::sort(g_textureList.begin(), g_textureList.end());
+        
+        std::cout << "[EDEN] Loaded " << g_textureList.size() << " textures from " << textures_dir << std::endl;
+        g_textureListLoaded = true;
+    } catch (const std::exception& e) {
+        std::cerr << "[EDEN] Error loading texture list: " << e.what() << std::endl;
+    }
+}
+
+// Get texture count
+extern "C" int heidic_get_texture_count() {
+    if (!g_textureListLoaded) heidic_load_texture_list();
+    return (int)g_textureList.size();
+}
+
+// Get texture name by index
+extern "C" const char* heidic_get_texture_name(int index) {
+    if (!g_textureListLoaded) heidic_load_texture_list();
+    if (index < 0 || index >= (int)g_textureList.size()) return "";
+    return g_textureList[index].c_str();
+}
+
+// Get selected texture name
+extern "C" const char* heidic_get_selected_texture() {
+    // Debug output (commented out to reduce spam, uncomment if needed)
+    // std::cout << "[DEBUG] Getting selected texture: '" << g_selectedTexture << "'" << std::endl;
+    // std::cout.flush();
+    return g_selectedTexture.c_str();
+}
+
+// Set selected texture
+extern "C" void heidic_set_selected_texture(const char* texture_name) {
+    std::string new_texture = texture_name ? std::string(texture_name) : "";
+    std::cout << "[DEBUG] Setting selected texture from '" << g_selectedTexture << "' to '" << new_texture << "'" << std::endl;
+    std::cout.flush();
+    g_selectedTexture = new_texture;
+}
+
+// Load texture preview and return ImGui texture ID (VkDescriptorSet)
+// Returns 0 if failed
+extern "C" int64_t heidic_get_texture_preview_id(const char* texture_name) {
+    if (!texture_name || strlen(texture_name) == 0) return 0;
+    
+    std::string name = texture_name;
+    
+    // Check cache first
+    auto it = g_texturePreviews.find(name);
+    if (it != g_texturePreviews.end()) {
+        return (uint64_t)(uintptr_t)it->second.descriptorSet;
+    }
+    
+    // Load texture
+    if (g_texturesBaseDir.empty()) {
+        heidic_load_texture_list();
+    }
+    
+    if (g_texturesBaseDir.empty()) return 0;
+    
+    std::string full_path = g_texturesBaseDir + "/" + name;
+    
+    int texWidth, texHeight, texChannels;
+    stbi_uc* pixels = stbi_load(full_path.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+    if (!pixels) {
+        std::cerr << "[EDEN] Failed to load texture: " << full_path << std::endl;
+        return 0;
+    }
+    
+    // Create Vulkan image (similar to createTextureAndDescriptors)
+    VkImage image;
+    VkDeviceMemory imageMemory;
+    VkImageView imageView;
+    
+    VkDeviceSize imageSize = (VkDeviceSize)(texWidth) * texHeight * 4;
+    
+    // Create staging buffer
+    VkBuffer stagingBuffer;
+    VkDeviceMemory stagingBufferMemory;
+    createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
+    
+    void* data;
+    vkMapMemory(g_device, stagingBufferMemory, 0, imageSize, 0, &data);
+    memcpy(data, pixels, (size_t)imageSize);
+    vkUnmapMemory(g_device, stagingBufferMemory);
+    stbi_image_free(pixels);
+    
+    // Create image
+    VkImageCreateInfo imageInfo = {};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.extent.width = texWidth;
+    imageInfo.extent.height = texHeight;
+    imageInfo.extent.depth = 1;
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    
+    vkCreateImage(g_device, &imageInfo, nullptr, &image);
+    
+    VkMemoryRequirements memRequirements;
+    vkGetImageMemoryRequirements(g_device, image, &memRequirements);
+    
+    VkMemoryAllocateInfo allocInfo = {};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    
+    vkAllocateMemory(g_device, &allocInfo, nullptr, &imageMemory);
+    vkBindImageMemory(g_device, image, imageMemory, 0);
+    
+    // Transition and copy
+    transitionImageLayout(image, imageInfo.format, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    
+    VkCommandBufferAllocateInfo cbAlloc = {};
+    cbAlloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbAlloc.commandPool = g_commandPool;
+    cbAlloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbAlloc.commandBufferCount = 1;
+    
+    VkCommandBuffer cmd;
+    vkAllocateCommandBuffers(g_device, &cbAlloc, &cmd);
+    
+    VkCommandBufferBeginInfo beginInfo = {};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &beginInfo);
+    
+    VkBufferImageCopy region = {};
+    region.bufferOffset = 0;
+    region.bufferRowLength = 0;
+    region.bufferImageHeight = 0;
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.mipLevel = 0;
+    region.imageSubresource.baseArrayLayer = 0;
+    region.imageSubresource.layerCount = 1;
+    region.imageOffset = {0, 0, 0};
+    region.imageExtent = {(uint32_t)texWidth, (uint32_t)texHeight, 1};
+    
+    vkCmdCopyBufferToImage(cmd, stagingBuffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    
+    vkEndCommandBuffer(cmd);
+    
+    VkSubmitInfo submitInfo = {};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmd;
+    vkQueueSubmit(g_graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(g_graphicsQueue);
+    
+    vkFreeCommandBuffers(g_device, g_commandPool, 1, &cmd);
+    
+    transitionImageLayout(image, imageInfo.format, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    
+    vkDestroyBuffer(g_device, stagingBuffer, nullptr);
+    vkFreeMemory(g_device, stagingBufferMemory, nullptr);
+    
+    // Create image view
+    VkImageViewCreateInfo viewInfo = {};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = imageInfo.format;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+    
+    vkCreateImageView(g_device, &viewInfo, nullptr, &imageView);
+    
+    // Create ImGui descriptor set
+    VkDescriptorSet descriptorSet = ImGui_ImplVulkan_AddTexture(g_textureSampler, imageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    
+    // Cache it
+    TexturePreview preview;
+    preview.descriptorSet = descriptorSet;
+    preview.width = texWidth;
+    preview.height = texHeight;
+    g_texturePreviews[name] = preview;
+    
+    return (uint64_t)(uintptr_t)descriptorSet;
+}
+
+// Get texture preview size
+extern "C" void heidic_get_texture_preview_size(const char* texture_name, int* width, int* height) {
+    if (!texture_name || !width || !height) return;
+    
+    std::string name = texture_name;
+    auto it = g_texturePreviews.find(name);
+    if (it != g_texturePreviews.end()) {
+        *width = it->second.width;
+        *height = it->second.height;
+    } else {
+        *width = 0;
+        *height = 0;
+    }
+}
+
+// Note: g_editingCombinationId and g_combinationNameBuffer 
+// are declared earlier in the file (near top) so heidic_begin_frame() can access them
+
+// Find all connected cubes and assign them to combinations
+extern "C" void heidic_combine_connected_cubes() {
+    heidic_combine_connected_cubes_from_selection(-1);  // -1 = combine all
+}
+
+extern "C" void heidic_combine_connected_cubes_from_selection(int selected_cube_storage_index) {
+    std::cout << "[DEBUG] heidic_combine_connected_cubes_from_selection: START, selected_index=" << selected_cube_storage_index << std::endl;
+    std::cout << "[DEBUG] Total cubes: " << g_createdCubes.size() << std::endl;
+    int active_count = 0;
+    for (const auto& cube : g_createdCubes) {
+        if (cube.active == 1) active_count++;
+    }
+    std::cout << "[DEBUG] Active cubes: " << active_count << std::endl;
+    std::cout.flush();
+    
+    // If a cube is selected, validate it
+    if (selected_cube_storage_index >= 0) {
+        if (selected_cube_storage_index >= (int)g_createdCubes.size() || 
+            g_createdCubes[selected_cube_storage_index].active != 1) {
+            // Invalid selection, silently fail
+            std::cout << "[DEBUG] heidic_combine_connected_cubes_from_selection: Invalid selection, silently failing" << std::endl;
+            std::cout.flush();
+            return;
+        }
+    }
+    
+    // Reset all combination IDs
+    for (auto& cube : g_createdCubes) {
+        if (cube.active == 1) {
+            cube.combination_id = -1;
+        }
+    }
+    
+    // Clear editing state when recombining
+    g_editingCombinationId = -1;
+    
+    // Now rebuild the combination structure
+    g_nextCombinationId = 0;
+    g_combinationExpanded.clear();
+    g_combinationNames.clear();  // Clear custom names when recombining
+    
+    std::cout << "[DEBUG] heidic_combine_connected_cubes_from_selection: Cleared editing state" << std::endl;
+    std::cout.flush();
+    
+    // Use union-find (disjoint set) to group connected cubes
+    std::vector<int> parent(g_createdCubes.size());
+    for (size_t i = 0; i < parent.size(); i++) {
+        parent[i] = (int)i;
+    }
+    
+    // Helper function for union-find (can't use recursive lambda, so use regular function)
+    std::function<int(int)> find = [&](int x) -> int {
+        if (parent[x] != x) {
+            parent[x] = find(parent[x]);  // Path compression
+        }
+        return parent[x];
+    };
+    
+    auto unite = [&](int x, int y) {
+        int px = find(x);
+        int py = find(y);
+        if (px != py) {
+            parent[px] = py;
+        }
+    };
+    
+    if (selected_cube_storage_index >= 0) {
+        // Only combine cubes connected to the selected cube that are NOT already in a combination
+        // If the selected cube is already in a combination, do nothing (allow multiple separate combinations)
+        if (g_createdCubes[selected_cube_storage_index].combination_id >= 0) {
+            // Selected cube is already in a combination, skip
+            return;
+        }
+        
+        // Use BFS to find all connected cubes starting from selected cube
+        // Only include cubes that are NOT already in a combination
+        std::vector<bool> visited(g_createdCubes.size(), false);
+        std::queue<int> toVisit;
+        toVisit.push(selected_cube_storage_index);
+        visited[selected_cube_storage_index] = true;
+        
+        while (!toVisit.empty()) {
+            int current = toVisit.front();
+            toVisit.pop();
+            
+            // Check all other cubes for connectivity
+            for (size_t i = 0; i < g_createdCubes.size(); i++) {
+                if (g_createdCubes[i].active != 1) continue;
+                if (visited[i]) continue;
+                if ((int)i == current) continue;
+                // Skip cubes that are already in a combination
+                if (g_createdCubes[i].combination_id >= 0) continue;
+                
+                if (cubesAreTouching(g_createdCubes[current], g_createdCubes[i])) {
+                    unite(current, (int)i);
+                    visited[i] = true;
+                    toVisit.push((int)i);
+                }
+            }
+        }
+        
+        // Only assign combination ID to cubes connected to the selected cube (and not already combined)
+        int selectedRoot = find(selected_cube_storage_index);
+        int newId = g_nextCombinationId++;
+        g_combinationExpanded[newId] = false;  // Collapsed by default
+        
+        for (size_t i = 0; i < g_createdCubes.size(); i++) {
+            if (g_createdCubes[i].active != 1) continue;
+            if (g_createdCubes[i].combination_id >= 0) continue;  // Skip already combined cubes
+            if (find((int)i) == selectedRoot) {
+                g_createdCubes[i].combination_id = newId;
+            }
+        }
+    } else {
+        // Original behavior: combine all connected cubes
+        // Check all pairs of active cubes for connectivity
+        int connections_found = 0;
+        for (size_t i = 0; i < g_createdCubes.size(); i++) {
+            if (g_createdCubes[i].active != 1) continue;
+            
+            for (size_t j = i + 1; j < g_createdCubes.size(); j++) {
+                if (g_createdCubes[j].active != 1) continue;
+                
+                if (cubesAreTouching(g_createdCubes[i], g_createdCubes[j])) {
+                    std::cout << "[DEBUG] Found connection between cube " << i << " and cube " << j << std::endl;
+                    unite((int)i, (int)j);
+                    connections_found++;
+                }
+            }
+        }
+        std::cout << "[DEBUG] Total connections found: " << connections_found << std::endl;
+        std::cout.flush();
+        
+        // Assign combination IDs to each group
+        std::map<int, int> rootToCombinationId;
+        
+        for (size_t i = 0; i < g_createdCubes.size(); i++) {
+            if (g_createdCubes[i].active != 1) continue;
+            
+            int root = find((int)i);
+            if (rootToCombinationId.find(root) == rootToCombinationId.end()) {
+                // New combination group
+                int newId = g_nextCombinationId++;
+                rootToCombinationId[root] = newId;
+                g_combinationExpanded[newId] = false;  // Collapsed by default
+                std::cout << "[DEBUG] Created new combination group " << newId << " for root " << root << std::endl;
+            }
+            g_createdCubes[i].combination_id = rootToCombinationId[root];
+        }
+        std::cout << "[DEBUG] Total combination groups created: " << g_nextCombinationId << std::endl;
+        std::cout.flush();
+    }
+}
+
+// Get combination ID for a cube (-1 if not in a combination)
+extern "C" int heidic_get_cube_combination_id(int cube_index) {
+    if (cube_index < 0 || cube_index >= (int)g_createdCubes.size()) return -1;
+    return g_createdCubes[cube_index].combination_id;
+}
+
+// Get number of cubes in a combination
+extern "C" int heidic_get_combination_cube_count(int combination_id) {
+    if (combination_id < 0) return 0;
+    int count = 0;
+    for (const auto& cube : g_createdCubes) {
+        if (cube.active == 1 && cube.combination_id == combination_id) {
+            count++;
+        }
+    }
+    return count;
+}
+
+// Get the first cube index in a combination (for iteration)
+extern "C" int heidic_get_combination_first_cube(int combination_id) {
+    if (combination_id < 0) return -1;
+    for (size_t i = 0; i < g_createdCubes.size(); i++) {
+        if (g_createdCubes[i].active == 1 && g_createdCubes[i].combination_id == combination_id) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+// Get next cube in same combination (for iteration)
+extern "C" int heidic_get_combination_next_cube(int cube_index) {
+    if (cube_index < 0 || cube_index >= (int)g_createdCubes.size()) return -1;
+    int combination_id = g_createdCubes[cube_index].combination_id;
+    if (combination_id < 0) return -1;
+    
+    // Find next cube with same combination_id
+    for (size_t i = cube_index + 1; i < g_createdCubes.size(); i++) {
+        if (g_createdCubes[i].active == 1 && g_createdCubes[i].combination_id == combination_id) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+// Get total number of combinations
+extern "C" int heidic_get_combination_count() {
+    return g_nextCombinationId;
+}
+
+// Format combination name like "combination_001" (or custom name if set)
+extern "C" const char* heidic_format_combination_name(int combination_id) {
+    if (combination_id < 0) return "invalid";
+    
+    // Check if there's a custom name
+    auto it = g_combinationNames.find(combination_id);
+    if (it != g_combinationNames.end() && !it->second.empty()) {
+        // Return custom name (store in static buffer for safety)
+        static char customBuffer[256];
+        strncpy(customBuffer, it->second.c_str(), sizeof(customBuffer) - 1);
+        customBuffer[sizeof(customBuffer) - 1] = '\0';
+        return customBuffer;
+    }
+    
+    // Default name (5 digits like cubes: combination_00001)
+    static char buffer[64];
+    snprintf(buffer, sizeof(buffer), "combination_%05d", combination_id + 1); // +1 so first is 00001
+    return buffer;
+}
+
+// Get combination name for editing (returns pointer to editable buffer)
+extern "C" const char* heidic_get_combination_name_buffer(int combination_id) {
+    if (combination_id < 0) return "";
+    
+    // Initialize buffer with current name (custom or default)
+    auto it = g_combinationNames.find(combination_id);
+    if (it != g_combinationNames.end() && !it->second.empty()) {
+        strncpy(g_combinationNameBuffer, it->second.c_str(), sizeof(g_combinationNameBuffer) - 1);
+    } else {
+        snprintf(g_combinationNameBuffer, sizeof(g_combinationNameBuffer), "combination_%05d", combination_id + 1);
+    }
+    g_combinationNameBuffer[sizeof(g_combinationNameBuffer) - 1] = '\0';
+    return g_combinationNameBuffer;
+}
+
+// Set combination custom name
+extern "C" void heidic_set_combination_name(int combination_id, const char* name) {
+    if (combination_id < 0 || !name) return;
+    g_combinationNames[combination_id] = std::string(name);
+}
+// Wrapper for HEIDIC string type
+extern "C" void heidic_set_combination_name_wrapper(int combination_id, const char* name) {
+    heidic_set_combination_name(combination_id, name);
+}
+
+// Set combination name - extern "C" version (matches HEIDIC forward declarations)
+extern "C" void heidic_set_combination_name_wrapper_str(int combination_id, const char* name) {
+    heidic_set_combination_name_wrapper(combination_id, name);
+}
+
+// C++ overload for std::string (this will be called when HEIDIC passes std::string)
+void heidic_set_combination_name_wrapper_str(int combination_id, const std::string& name) {
+    heidic_set_combination_name_wrapper_str(combination_id, name.c_str());  // Call the extern "C" version
+}
+
+// Start editing a combination name
+// Note: This defers the actual start to the next frame to avoid ImGui frame scope issues
+extern "C" void heidic_start_editing_combination_name(int combination_id) {
+    if (combination_id < 0) return;
+    // Defer to next frame to avoid same-frame conflicts
+    g_pendingStartEditingId = combination_id;
+}
+
+// Stop editing combination name
+extern "C" void heidic_stop_editing_combination_name() {
+    g_editingCombinationId = -1;
+}
+
+// Get which combination is being edited (-1 if none)
+extern "C" int heidic_get_editing_combination_id() {
+    return g_editingCombinationId;
+}
+
+// Get combination name buffer (for input text)
+extern "C" const char* heidic_get_combination_name_edit_buffer() {
+    return g_combinationNameBuffer;
+}
+
+// Simple input text for combination name - handles buffer internally
+// Returns 1 if Enter was pressed (to save)
+extern "C" int heidic_imgui_input_text_combination_simple(int combination_id) {
+    if (combination_id < 0) return 0;
+    
+    // Initialize buffer if it doesn't exist
+    if (g_combinationEditBuffers.find(combination_id) == g_combinationEditBuffers.end()) {
+        const char* current_name = heidic_format_combination_name(combination_id);
+        g_combinationEditBuffers[combination_id] = std::string(current_name);
+    }
+    
+    // Get reference to the buffer
+    std::string& buffer = g_combinationEditBuffers[combination_id];
+    
+    // Create unique ID for this input field
+    char input_id[64];
+    snprintf(input_id, sizeof(input_id), "##combo_edit_%d", combination_id);
+    
+    // Use a temporary buffer for InputText (it needs a char*)
+    static char temp_buffer[256];
+    strncpy(temp_buffer, buffer.c_str(), sizeof(temp_buffer) - 1);
+    temp_buffer[sizeof(temp_buffer) - 1] = '\0';
+    
+    // Call InputText
+    int flags = ImGuiInputTextFlags_EnterReturnsTrue;
+    bool enter_pressed = ImGui::InputText(input_id, temp_buffer, sizeof(temp_buffer), flags);
+    
+    // Update the buffer with the new value
+    buffer = std::string(temp_buffer);
+    
+    // If Enter was pressed, save it as the combination name
+    if (enter_pressed) {
+        heidic_set_combination_name(combination_id, buffer.c_str());
+        return 1;
+    }
+    
+    return 0;
+}
+
+// Input text for combination name editing (returns 1 if Enter pressed)
+static int g_lastEditingId = -1;  // Track which combination was being edited last frame
+
+extern "C" int heidic_imgui_input_text_combination_name() {
+    if (g_editingCombinationId < 0) {
+        g_lastEditingId = -1;
+        return 0;
+    }
+    
+    // Validate combination still exists
+    int combination_count = heidic_get_combination_count();
+    if (g_editingCombinationId >= combination_count) {
+        g_editingCombinationId = -1;
+        g_lastEditingId = -1;
+        return 0;
+    }
+    
+    // Use unique ID for this combination's input field
+    char input_id[64];
+    snprintf(input_id, sizeof(input_id), "##combo_name_edit_%d", g_editingCombinationId);
+    
+    // Check if this is the first frame of editing this combination
+    bool is_first_frame = (g_lastEditingId != g_editingCombinationId);
+    g_lastEditingId = g_editingCombinationId;
+    
+    // Simple flags - no focus manipulation, let ImGui handle it naturally
+    int flags = ImGuiInputTextFlags_EnterReturnsTrue;
+    if (is_first_frame) {
+        flags |= ImGuiInputTextFlags_AutoSelectAll;
+    }
+    
+    // Call InputText - simple and direct
+    bool enter_pressed = ImGui::InputText(input_id, g_combinationNameBuffer, sizeof(g_combinationNameBuffer), flags);
+    
+    if (enter_pressed) {
+        return 1;
+    }
+    
+    return 0;
+}
+
+// Check if we should stop editing (Escape pressed, or clicked outside)
+extern "C" int heidic_imgui_should_stop_editing() {
+    return ImGui::IsKeyPressed(ImGuiKey_Escape) ? 1 : 0;
+}
+
+// Toggle combination expansion state
+extern "C" void heidic_toggle_combination_expanded(int combination_id) {
+    if (combination_id >= 0) {
+        g_combinationExpanded[combination_id] = !g_combinationExpanded[combination_id];
+    }
+}
+
+// Get combination expansion state
+extern "C" int heidic_is_combination_expanded(int combination_id) {
+    if (combination_id < 0) return 0;
+    auto it = g_combinationExpanded.find(combination_id);
+    if (it != g_combinationExpanded.end()) {
+        return it->second ? 1 : 0;
+    }
+    return 0;
+}
+
+// ============================================================================
+// FILE I/O FOR .EDEN LEVEL FILES
+// ============================================================================
+
+// Helper to create directory if it doesn't exist
+static void ensure_directory_exists(const std::string& path) {
+    try {
+        std::filesystem::create_directories(path);
+    } catch (...) {
+        // If filesystem API fails, try platform-specific methods
+#ifdef _WIN32
+        _mkdir(path.c_str());
+#else
+        mkdir(path.c_str(), 0755);
+#endif
+    }
+}
+
+// Simple text-based format:
+// EDEN_LEVEL v1
+// CUBE_COUNT <n>
+// CUBE <index> <x> <y> <z> <sx> <sy> <sz> <active>
+// ...
+
+// Wrapper for std::string (for HEIDIC compatibility)
+extern "C" int heidic_save_level_str_wrapper(const char* filepath) {
+    if (!filepath) return 0;
+    return heidic_save_level(filepath);
+}
+
+// C++ overload (for direct C++ calls)
+int heidic_save_level_str(const std::string& level_name) {
+    return heidic_save_level(level_name.c_str());
+}
+
+extern "C" int heidic_save_level(const char* filepath) {
+    if (!filepath || strlen(filepath) == 0) {
+        return 0;  // No file path provided
+    }
+    
+    // Create parent directory if it doesn't exist
+    std::filesystem::path p(filepath);
+    if (p.has_parent_path()) {
+        ensure_directory_exists(p.parent_path().string());
+    }
+    
+    std::string filename = filepath;
+    std::ofstream file(filename);
+    if (!file.is_open()) {
+        return 0;  // Failed to open file
+    }
+    
+    // Write header
+    file << "EDEN_LEVEL v1\n";
+    
+    // Write cube count
+    int active_count = 0;
+    for (const auto& cube : g_createdCubes) {
+        if (cube.active == 1) active_count++;
+    }
+    file << "CUBE_COUNT " << active_count << "\n";
+    
+    // Write all active cubes
+    for (size_t i = 0; i < g_createdCubes.size(); i++) {
+        const auto& cube = g_createdCubes[i];
+        if (cube.active == 1) {
+            file << "CUBE " << i << " " 
+                 << cube.x << " " << cube.y << " " << cube.z << " "
+                 << cube.sx << " " << cube.sy << " " << cube.sz << " "
+                 << cube.r << " " << cube.g << " " << cube.b << " "
+                 << cube.active << " " << cube.combination_id << "\n";
+        }
+    }
+    
+    // Write combination names (custom names only, skip default names)
+    for (const auto& pair : g_combinationNames) {
+        if (!pair.second.empty()) {
+            file << "COMBINATION_NAME " << pair.first << " " << pair.second << "\n";
+        }
+    }
+    
+    file.close();
+    return 1;  // Success
+}
+
+// Wrapper for std::string (for HEIDIC compatibility)
+extern "C" int heidic_load_level_str_wrapper(const char* filepath) {
+    if (!filepath) return 0;
+    return heidic_load_level(filepath);
+}
+
+// C++ overload (for direct C++ calls)
+int heidic_load_level_str(const std::string& level_name) {
+    return heidic_load_level(level_name.c_str());
+}
+
+extern "C" int heidic_load_level(const char* filepath) {
+    if (!filepath || strlen(filepath) == 0) {
+        return 0;  // No file path provided
+    }
+    
+    std::string filename = filepath;
+    
+    std::ifstream file(filename);
+    if (!file.is_open()) {
+        return 0;  // Failed to open file
+    }
+    
+    // Clear existing cubes
+    g_createdCubes.clear();
+    
+    std::string line;
+    std::string version;
+    
+    // Read header
+    if (std::getline(file, line)) {
+        std::istringstream iss(line);
+        iss >> version;
+        if (version != "EDEN_LEVEL") {
+            file.close();
+            return 0;  // Invalid format
+        }
+    } else {
+        file.close();
+        return 0;
+    }
+    
+    // Read cube count (for validation, but we'll read all cubes)
+    int cube_count = 0;
+    if (std::getline(file, line)) {
+        std::istringstream iss(line);
+        std::string token;
+        iss >> token >> cube_count;
+    }
+    
+    // Read cubes and combination data
+    while (std::getline(file, line)) {
+        std::istringstream iss(line);
+        std::string token;
+        iss >> token;
+        
+        if (token == "CUBE") {
+            CreatedCube cube;
+            int index;
+            iss >> index >> cube.x >> cube.y >> cube.z 
+                >> cube.sx >> cube.sy >> cube.sz 
+                >> cube.r >> cube.g >> cube.b >> cube.active;
+            
+            // Read combination_id if present (for backward compatibility)
+            cube.combination_id = -1;  // Default: no combination
+            if (iss >> cube.combination_id) {
+                // Successfully read combination_id
+            } else {
+                // Old format - no combination_id, set to -1
+                cube.combination_id = -1;
+            }
+            
+            // Ensure vector is large enough
+            while ((int)g_createdCubes.size() <= index) {
+                CreatedCube empty;
+                empty.x = empty.y = empty.z = 0.0f;
+                empty.sx = empty.sy = empty.sz = 200.0f;
+                empty.r = empty.g = empty.b = 1.0f;
+                empty.active = 0;
+                empty.combination_id = -1;
+                g_createdCubes.push_back(empty);
+            }
+            
+            g_createdCubes[index] = cube;
+        } else if (token == "COMBINATION_NAME") {
+            int combination_id;
+            std::string name;
+            iss >> combination_id;
+            // Read the rest of the line as the name (handles spaces in names)
+            std::getline(iss, name);
+            // Trim leading whitespace
+            if (!name.empty() && name[0] == ' ') {
+                name = name.substr(1);
+            }
+            if (!name.empty()) {
+                g_combinationNames[combination_id] = name;
+            }
+        }
+    }
+    
+    file.close();
+    return 1;  // Success
+}
+
+// Native file dialogs using nativefiledialog-extended
+extern "C" int heidic_show_save_dialog() {
+    // Initialize COM if needed (required for Windows file dialogs)
+#ifdef _WIN32
+    HRESULT comInit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    bool comInitialized = (comInit == S_OK || comInit == S_FALSE);  // S_FALSE means already initialized
+    if (!comInitialized && comInit != RPC_E_CHANGED_MODE) {
+        std::cerr << "[EDEN] Failed to initialize COM: " << std::hex << comInit << std::endl;
+        return 0;
+    }
+#endif
+    
+    nfdu8char_t* outPath = nullptr;
+    
+    // Filter for .eden files
+    nfdu8filteritem_t filterItem[1] = { { "Eden Level Files", "eden" } };
+    
+    // Set up parent window handle if available
+    nfdwindowhandle_t parentWindow = {};
+    if (g_mainWindow) {
+#ifdef _WIN32
+        parentWindow.type = NFD_WINDOW_HANDLE_TYPE_WINDOWS;
+        parentWindow.handle = glfwGetWin32Window(g_mainWindow);
+#elif defined(__APPLE__)
+        parentWindow.type = NFD_WINDOW_HANDLE_TYPE_COCOA;
+        parentWindow.handle = glfwGetCocoaWindow(g_mainWindow);
+#elif defined(__linux__)
+        parentWindow.type = NFD_WINDOW_HANDLE_TYPE_X11;
+        parentWindow.handle = (void*)(uintptr_t)glfwGetX11Window(g_mainWindow);
+#endif
+    }
+    
+    nfdsavedialogu8args_t args = {};
+    args.filterList = filterItem;
+    args.filterCount = 1;
+    args.defaultPath = nullptr;
+    args.defaultName = "level.eden";
+    args.parentWindow = parentWindow;
+    
+    // Process pending messages before showing dialog (ensures window is responsive)
+    glfwPollEvents();
+    
+    std::cout << "[EDEN] Showing save dialog..." << std::endl;
+    std::cout.flush();
+    
+    nfdresult_t result = NFD_SaveDialogU8_With(&outPath, &args);
+    
+    std::cout << "[EDEN] Save dialog returned: " << (int)result << std::endl;
+    std::cout.flush();
+    
+    // Process messages after dialog closes
+    glfwPollEvents();
+    
+    int save_result = 0;
+    if (result == NFD_OKAY && outPath) {
+        save_result = heidic_save_level(outPath);
+        NFD_FreePathU8(outPath);
+    } else if (result == NFD_CANCEL) {
+        // User cancelled - this is fine
+        save_result = 0;
+    } else {
+        // Error occurred
+        const char* error = NFD_GetError();
+        if (error) {
+            std::cerr << "[EDEN] File dialog error: " << error << std::endl;
+        }
+        save_result = 0;
+    }
+    
+#ifdef _WIN32
+    // Uninitialize COM if we initialized it
+    if (comInitialized && comInit == S_OK) {
+        CoUninitialize();
+    }
+#endif
+    
+    return save_result;
+}
+
+extern "C" int heidic_show_open_dialog() {
+    // Initialize COM if needed (required for Windows file dialogs)
+#ifdef _WIN32
+    HRESULT comInit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    bool comInitialized = (comInit == S_OK || comInit == S_FALSE);  // S_FALSE means already initialized
+    if (!comInitialized && comInit != RPC_E_CHANGED_MODE) {
+        std::cerr << "[EDEN] Failed to initialize COM: " << std::hex << comInit << std::endl;
+        return 0;
+    }
+#endif
+    
+    nfdu8char_t* outPath = nullptr;
+    
+    // Filter for .eden files
+    nfdu8filteritem_t filterItem[1] = { { "Eden Level Files", "eden" } };
+    
+    // Set up parent window handle if available
+    nfdwindowhandle_t parentWindow = {};
+    if (g_mainWindow) {
+#ifdef _WIN32
+        parentWindow.type = NFD_WINDOW_HANDLE_TYPE_WINDOWS;
+        parentWindow.handle = glfwGetWin32Window(g_mainWindow);
+#elif defined(__APPLE__)
+        parentWindow.type = NFD_WINDOW_HANDLE_TYPE_COCOA;
+        parentWindow.handle = glfwGetCocoaWindow(g_mainWindow);
+#elif defined(__linux__)
+        parentWindow.type = NFD_WINDOW_HANDLE_TYPE_X11;
+        parentWindow.handle = (void*)(uintptr_t)glfwGetX11Window(g_mainWindow);
+#endif
+    }
+    
+    nfdopendialogu8args_t args = {};
+    args.filterList = filterItem;
+    args.filterCount = 1;
+    args.defaultPath = nullptr;
+    args.parentWindow = parentWindow;
+    
+    // Process pending messages before showing dialog (ensures window is responsive)
+    glfwPollEvents();
+    
+    nfdresult_t result = NFD_OpenDialogU8_With(&outPath, &args);
+    
+    // Process messages after dialog closes
+    glfwPollEvents();
+    
+    int load_result = 0;
+    if (result == NFD_OKAY && outPath) {
+        load_result = heidic_load_level(outPath);
+        NFD_FreePathU8(outPath);
+    } else if (result == NFD_CANCEL) {
+        // User cancelled - this is fine
+        load_result = 0;
+    } else {
+        // Error occurred
+        const char* error = NFD_GetError();
+        if (error) {
+            std::cerr << "[EDEN] File dialog error: " << error << std::endl;
+        }
+        load_result = 0;
+    }
+    
+#ifdef _WIN32
+    // Uninitialize COM if we initialized it
+    if (comInitialized && comInit == S_OK) {
+        CoUninitialize();
+    }
+#endif
+    
+    return load_result;
 }

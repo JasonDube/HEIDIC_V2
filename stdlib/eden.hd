@@ -25,6 +25,10 @@ extern fn heidic_end_frame(): void;
 
 // Drawing Functions
 extern fn heidic_draw_cube(x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32, sx: f32, sy: f32, sz: f32): void;
+extern fn heidic_draw_cube_grey(x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32, sx: f32, sy: f32, sz: f32): void;
+extern fn heidic_draw_cube_blue(x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32, sx: f32, sy: f32, sz: f32): void;
+extern fn heidic_draw_cube_colored(x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32, sx: f32, sy: f32, sz: f32, r: f32, g: f32, b: f32): void;
+extern fn heidic_flush_colored_cubes(): void;  // Flush current batch (draw immediately and clear)
 extern fn heidic_draw_line(x1: f32, y1: f32, z1: f32, x2: f32, y2: f32, z2: f32, r: f32, g: f32, b: f32): void;
 extern fn heidic_draw_model_origin(x: f32, y: f32, z: f32, rx: f32, ry: f32, rz: f32, length: f32): void;
 
@@ -40,11 +44,52 @@ extern fn heidic_draw_mesh(mesh_id: i32, x: f32, y: f32, z: f32, rx: f32, ry: f3
 
 // ImGui Functions
 extern fn heidic_imgui_init(window: GLFWwindow): void;
-extern fn heidic_imgui_begin(name: string): void;
+extern fn heidic_imgui_begin(name: string): i32;  // Returns 1 if window is open, 0 if closed
+extern fn heidic_imgui_begin_docked_with(name: string, dock_with_name: string): void;  // Begin window docked with another window
 extern fn heidic_imgui_end(): void;
 extern fn heidic_imgui_text(text: string): void;
+extern fn heidic_imgui_text_str_wrapper(text: string): void;
+extern fn heidic_imgui_text_colored(text: string, r: f32, g: f32, b: f32, a: f32): void;  // Text with color
+extern fn heidic_imgui_text_bold(text: string): void;  // Text in bold  // Wrapper for HEIDIC string type
 extern fn heidic_imgui_text_float(label: string, value: f32): void;
+extern fn heidic_format_cube_name(index: i32): string;
+extern fn heidic_format_cube_name_with_index(index: i32): string;  // Format with 5 digits (cube_00001)  // Format cube name like "cube_001"
 extern fn heidic_imgui_drag_float(label: string, v: f32, speed: f32): f32;
+
+// ImGui Menu Bar Functions
+extern fn heidic_imgui_begin_main_menu_bar(): i32;
+extern fn heidic_imgui_end_main_menu_bar(): void;
+
+// ImGui Dockspace Functions
+extern fn heidic_imgui_setup_dockspace(): void;  // Call once per frame after NewFrame() to enable docking
+extern fn heidic_imgui_load_layout(ini_path: string): void;  // Load layout from .ini file (use "" for default)
+extern fn heidic_imgui_save_layout(ini_path: string): void;  // Save layout to .ini file (use "" for default)
+extern fn heidic_imgui_begin_menu(label: string): i32;
+extern fn heidic_imgui_end_menu(): void;
+extern fn heidic_imgui_menu_item(label: string): i32;
+extern fn heidic_imgui_separator(): void;
+extern fn heidic_imgui_button(label: string): i32;
+extern fn heidic_imgui_collapsing_header(label: string): i32;  // Collapsible header (returns 1 if expanded)  // Button widget
+extern fn heidic_imgui_button_str_wrapper(label: string): i32;  // Button widget wrapper (for HEIDIC string type)
+extern fn heidic_imgui_same_line(): void;  // Put next widget on same line
+extern fn heidic_imgui_push_id(id: i32): void;  // Push unique ID for widget grouping
+extern fn heidic_imgui_pop_id(): void;  // Pop ID
+extern fn heidic_string_to_char_ptr(str: string): string;  // Helper: convert string to const char* (returns same string, but helps with type conversion)
+extern fn heidic_imgui_selectable_str(label: string): i32;  // Selectable text (clickable) - accepts string, converts internally
+extern fn heidic_imgui_selectable_colored(label: string, r: f32, g: f32, b: f32, a: f32): i32;  // Selectable with color
+extern fn heidic_imgui_image_button(str_id: string, texture_id: i64, size_x: f32, size_y: f32, tint_r: f32, tint_g: f32, tint_b: f32, tint_a: f32): i32;  // Image button for texture previews
+extern fn heidic_imgui_is_item_clicked(): i32;  // Check if last item was clicked
+extern fn heidic_imgui_is_key_enter_pressed(): i32;  // Check if Enter key is pressed
+extern fn heidic_imgui_is_key_escape_pressed(): i32;  // Check if Escape key is pressed
+extern fn heidic_imgui_input_text(label: string, buffer: string, buffer_size: i32): i32;  // Input text field
+
+// File I/O Functions (accepts full file path)
+extern fn heidic_save_level_str_wrapper(filepath: string): i32;
+extern fn heidic_load_level_str_wrapper(filepath: string): i32;
+
+// Native file dialogs
+extern fn heidic_show_save_dialog(): i32;  // Shows native save dialog, returns 1 if saved
+extern fn heidic_show_open_dialog(): i32;  // Shows native open dialog, returns 1 if loaded
 extern fn heidic_get_fps(): f32;
 
 // Math Functions
@@ -52,10 +97,15 @@ extern fn heidic_convert_degrees_to_radians(degrees: f32): f32;
 extern fn heidic_convert_radians_to_degrees(radians: f32): f32;
 extern fn heidic_sin(radians: f32): f32;
 extern fn heidic_cos(radians: f32): f32;
+extern fn heidic_atan2(y: f32, x: f32): f32;
+extern fn heidic_asin(value: f32): f32;
 
 // Vector Operations
 extern fn heidic_vec3(x: f32, y: f32, z: f32): Vec3;
 extern fn heidic_vec3_add(a: Vec3, b: Vec3): Vec3;
+extern fn heidic_vec3_sub(a: Vec3, b: Vec3): Vec3;
+extern fn heidic_vec3_distance(a: Vec3, b: Vec3): f32;
+extern fn heidic_vec3_mul_scalar(v: Vec3, s: f32): Vec3;
 extern fn heidic_vec_copy(src: Vec3): Vec3;
 extern fn heidic_attach_camera_translation(player_translation: Vec3): Vec3;
 extern fn heidic_attach_camera_rotation(player_rotation: Vec3): Vec3;
@@ -67,6 +117,9 @@ extern fn heidic_sleep_ms(ms: i32): void;
 extern fn heidic_get_mouse_x(window: GLFWwindow): f32;
 extern fn heidic_get_mouse_y(window: GLFWwindow): f32;
 extern fn heidic_get_mouse_scroll_y(window: GLFWwindow): f32; // Get vertical scroll delta
+extern fn heidic_get_mouse_delta_x(window: GLFWwindow): f32; // Get mouse delta X (horizontal movement)
+extern fn heidic_get_mouse_delta_y(window: GLFWwindow): f32; // Get mouse delta Y (vertical movement)
+extern fn heidic_set_cursor_mode(window: GLFWwindow, mode: i32): void; // Set cursor mode: 0=normal, 1=hidden, 2=disabled(captured)
 extern fn heidic_get_mouse_ray_origin(window: GLFWwindow): Vec3;
 extern fn heidic_get_mouse_ray_dir(window: GLFWwindow): Vec3;
 extern fn heidic_raycast_cube_hit(window: GLFWwindow, cubeX: f32, cubeY: f32, cubeZ: f32, cubeSx: f32, cubeSy: f32, cubeSz: f32): i32;
@@ -82,6 +135,7 @@ extern fn heidic_gizmo_is_interacting(): i32;
 
 // Dynamic Cube Storage System
 extern fn heidic_create_cube(x: f32, y: f32, z: f32, sx: f32, sy: f32, sz: f32): i32;
+extern fn heidic_create_cube_with_color(x: f32, y: f32, z: f32, sx: f32, sy: f32, sz: f32, r: f32, g: f32, b: f32): i32;
 extern fn heidic_get_cube_count(): i32;
 extern fn heidic_get_cube_total_count(): i32;
 extern fn heidic_get_cube_x(index: i32): f32;
@@ -90,10 +144,55 @@ extern fn heidic_get_cube_z(index: i32): f32;
 extern fn heidic_get_cube_sx(index: i32): f32;
 extern fn heidic_get_cube_sy(index: i32): f32;
 extern fn heidic_get_cube_sz(index: i32): f32;
+extern fn heidic_get_cube_r(index: i32): f32;
+extern fn heidic_get_cube_g(index: i32): f32;
+extern fn heidic_get_cube_b(index: i32): f32;
+extern fn heidic_get_cube_texture_name(index: i32): string;  // Get cube texture name
+extern fn heidic_load_texture_for_rendering(texture_name: string): i32;  // Load texture and update global texture for rendering
 extern fn heidic_get_cube_active(index: i32): i32;
 extern fn heidic_set_cube_pos(index: i32, x: f32, y: f32, z: f32): void;
 extern fn heidic_set_cube_pos_f(index: f32, x: f32, y: f32, z: f32): void;
 extern fn heidic_delete_cube(index: i32): void;
 extern fn heidic_find_next_active_cube_index(start_index: i32): i32;
 extern fn heidic_int_to_float(value: i32): f32;
+extern fn heidic_float_to_int(value: f32): i32;  // Convert f32 to i32
+extern fn heidic_random_float(): f32;  // Returns random float between 0.0 and 1.0
+
+// Combination System
+extern fn heidic_combine_connected_cubes(): void;  // Find and group all connected cubes
+extern fn heidic_combine_connected_cubes_from_selection(selected_cube_storage_index: i32): void;  // Combine cubes connected to selected cube (-1 = combine all)
+extern fn heidic_get_cube_combination_id(cube_index: i32): i32;  // Get combination ID for a cube (-1 if none)
+extern fn heidic_get_combination_cube_count(combination_id: i32): i32;  // Get number of cubes in combination
+extern fn heidic_get_combination_first_cube(combination_id: i32): i32;  // Get first cube index in combination
+extern fn heidic_get_combination_next_cube(cube_index: i32): i32;  // Get next cube in same combination (-1 if none)
+extern fn heidic_get_combination_count(): i32;  // Get total number of combinations
+extern fn heidic_format_combination_name(combination_id: i32): string;  // Format name like "combination_001" (or custom name)
+extern fn heidic_get_combination_name_buffer(combination_id: i32): string;  // Get name buffer for editing
+extern fn heidic_set_combination_name_wrapper_str(combination_id: i32, name: string): void;  // Set custom name for combination (C++ overload for HEIDIC string type)
+extern fn heidic_start_editing_combination_name(combination_id: i32): void;  // Start editing combination name
+extern fn heidic_stop_editing_combination_name(): void;  // Stop editing combination name
+extern fn heidic_get_editing_combination_id(): i32;  // Get which combination is being edited (-1 if none)
+extern fn heidic_get_combination_name_edit_buffer(): string;  // Get editable buffer for combination name
+extern fn heidic_imgui_input_text_combination_simple(combination_id: i32): i32;  // Simple input text for combination (returns 1 on Enter)
+
+// Multi-selection functions
+extern fn heidic_clear_selection(): void;
+extern fn heidic_add_to_selection(cube_storage_index: i32): void;
+extern fn heidic_remove_from_selection(cube_storage_index: i32): void;
+extern fn heidic_toggle_selection(cube_storage_index: i32): void;
+extern fn heidic_is_cube_selected(cube_storage_index: i32): i32;
+extern fn heidic_get_selection_count(): i32;
+extern fn heidic_combine_selected_cubes(): void;
+
+// Texture swatch functions
+extern fn heidic_load_texture_list(): void;
+extern fn heidic_get_texture_count(): i32;
+extern fn heidic_get_texture_name(index: i32): string;
+extern fn heidic_get_selected_texture(): string;
+extern fn heidic_set_selected_texture(texture_name: string): void;
+extern fn heidic_get_texture_preview_id(texture_name: string): i64;  // Get ImGui texture ID for preview
+extern fn heidic_imgui_input_text_combination_name(): i32;  // Input text for editing combination name (returns 1 on Enter)
+extern fn heidic_imgui_should_stop_editing(): i32;  // Check if we should stop editing (Escape or click outside)
+extern fn heidic_toggle_combination_expanded(combination_id: i32): void;  // Toggle expand/collapse state
+extern fn heidic_is_combination_expanded(combination_id: i32): i32;  // Get expansion state (1=expanded, 0=collapsed)
 

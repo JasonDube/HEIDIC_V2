@@ -15,6 +15,17 @@ impl CodeGenerator {
     pub fn generate(&mut self, program: &Program) -> Result<String> {
         let mut output = String::new();
         
+        // Build map of extern function signatures (for automatic .c_str() conversion)
+        let mut extern_fn_signatures: std::collections::HashMap<String, Vec<Type>> = std::collections::HashMap::new();
+        let mut extern_fn_return_types: std::collections::HashMap<String, Type> = std::collections::HashMap::new();
+        for item in &program.items {
+            if let Item::ExternFunction(ext) = item {
+                let param_types: Vec<Type> = ext.params.iter().map(|p| p.ty.clone()).collect();
+                extern_fn_signatures.insert(ext.name.clone(), param_types);
+                extern_fn_return_types.insert(ext.name.clone(), ext.return_type.clone());
+            }
+        }
+        
         // Generate includes and standard library
         output.push_str("#include <iostream>\n");
         output.push_str("#include <vector>\n");
@@ -48,6 +59,8 @@ impl CodeGenerator {
             }
             if needs_imgui {
                 output.push_str("#include \"stdlib/eden_imgui.h\"\n");
+                // Include eden_vulkan_helpers.h for C++ overloads of string functions
+                output.push_str("#include \"vulkan/eden_vulkan_helpers.h\"\n");
             }
             output.push_str("\n");
         }
@@ -222,9 +235,9 @@ impl CodeGenerator {
         }
         output.push_str("\n");
         
-        // Generate function implementations
+        // Generate function implementations (pass extern_fn_signatures for .c_str() conversion)
         for f in &functions {
-            output.push_str(&self.generate_function(f, 0));
+            output.push_str(&self.generate_function_with_signatures(f, 0, &extern_fn_signatures, &extern_fn_return_types)?);
         }
         
         // Generate system scheduler if there are any systems with attributes
@@ -474,6 +487,52 @@ impl CodeGenerator {
         format!("using {} = {};\n", alias.name, target_type)
     }
     
+    fn generate_function_with_signatures(&self, f: &FunctionDef, indent: usize, extern_fn_signatures: &std::collections::HashMap<String, Vec<Type>>, extern_fn_return_types: &std::collections::HashMap<String, Type>) -> Result<String> {
+        let mut output = String::new();
+        
+        // Rename HEIDIC main to avoid conflict with C++ main
+        let func_name = if f.name == "main" {
+            "heidic_main".to_string()
+        } else {
+            f.name.clone()
+        };
+        
+        // If it's the main function with void return, change to int for C++
+        let return_type = if f.name == "main" && matches!(f.return_type, Type::Void) {
+            "int".to_string()
+        } else {
+            self.type_to_cpp(&f.return_type)
+        };
+        
+        output.push_str(&format!("{} {}(", return_type, func_name));
+        
+        // Parameters with default values
+        for (i, param) in f.params.iter().enumerate() {
+            if i > 0 {
+                output.push_str(", ");
+            }
+            output.push_str(&format!("{} {}", 
+                self.type_to_cpp(&param.ty), 
+                param.name));
+            if let Some(ref default_expr) = param.default_value {
+                output.push_str(&format!(" = {}", self.generate_expression_with_signatures(default_expr, extern_fn_signatures, extern_fn_return_types)?));
+            }
+        }
+        output.push_str(") {\n");
+        
+        for stmt in &f.body {
+            output.push_str(&self.generate_statement_with_signatures(stmt, indent + 1, extern_fn_signatures, extern_fn_return_types)?);
+        }
+        
+        // If it's main with void return type, add return 0
+        if f.name == "main" && matches!(f.return_type, Type::Void) {
+            output.push_str(&format!("{}    return 0;\n", self.indent(indent + 1)));
+        }
+        
+        output.push_str("}\n\n");
+        Ok(output)
+    }
+    
     fn generate_function(&self, f: &FunctionDef, indent: usize) -> String {
         let mut output = String::new();
         
@@ -518,6 +577,85 @@ impl CodeGenerator {
         
         output.push_str("}\n\n");
         output
+    }
+    
+    fn generate_statement_with_signatures(&self, stmt: &Statement, indent: usize, extern_fn_signatures: &std::collections::HashMap<String, Vec<Type>>, extern_fn_return_types: &std::collections::HashMap<String, Type>) -> Result<String> {
+        match stmt {
+            Statement::Let { name, ty, value } => {
+                let type_str = if let Some(ref t) = ty {
+                    format!("{} ", self.type_to_cpp(t))
+                } else {
+                    "auto ".to_string()
+                };
+                Ok(format!("{}    {} {} = {};\n", 
+                    self.indent(indent),
+                    type_str,
+                    name,
+                    self.generate_expression_with_signatures(value, extern_fn_signatures, extern_fn_return_types)?))
+            }
+            Statement::Assign { target, value } => {
+                Ok(format!("{}    {} = {};\n",
+                    self.indent(indent),
+                    self.generate_expression_with_signatures(target, extern_fn_signatures, extern_fn_return_types)?,
+                    self.generate_expression_with_signatures(value, extern_fn_signatures, extern_fn_return_types)?))
+            }
+            Statement::If { condition, then_block, else_block } => {
+                let mut output = format!("{}    if ({}) {{\n", 
+                    self.indent(indent),
+                    self.generate_expression_with_signatures(condition, extern_fn_signatures, extern_fn_return_types)?);
+                for stmt in then_block {
+                    output.push_str(&self.generate_statement_with_signatures(stmt, indent + 1, extern_fn_signatures, extern_fn_return_types)?);
+                }
+                if let Some(else_block) = else_block {
+                    output.push_str(&format!("{}    }} else {{\n", self.indent(indent)));
+                    for stmt in else_block {
+                        output.push_str(&self.generate_statement_with_signatures(stmt, indent + 1, extern_fn_signatures, extern_fn_return_types)?);
+                    }
+                }
+                output.push_str(&format!("{}    }}\n", self.indent(indent)));
+                Ok(output)
+            }
+            Statement::While { condition, body } => {
+                let mut output = format!("{}    while ({}) {{\n", 
+                    self.indent(indent),
+                    self.generate_expression_with_signatures(condition, extern_fn_signatures, extern_fn_return_types)?);
+                for stmt in body {
+                    output.push_str(&self.generate_statement_with_signatures(stmt, indent + 1, extern_fn_signatures, extern_fn_return_types)?);
+                }
+                output.push_str(&format!("{}    }}\n", self.indent(indent)));
+                Ok(output)
+            }
+            Statement::Loop { body } => {
+                let mut output = format!("{}    while (true) {{\n", self.indent(indent));
+                for stmt in body {
+                    output.push_str(&self.generate_statement_with_signatures(stmt, indent + 1, extern_fn_signatures, extern_fn_return_types)?);
+                }
+                output.push_str(&format!("{}    }}\n", self.indent(indent)));
+                Ok(output)
+            }
+            Statement::Return(expr) => {
+                if let Some(expr) = expr {
+                    Ok(format!("{}    return {};\n",
+                        self.indent(indent),
+                        self.generate_expression_with_signatures(expr, extern_fn_signatures, extern_fn_return_types)?))
+                } else {
+                    Ok(format!("{}    return 0;\n", self.indent(indent)))
+                }
+            }
+            Statement::Expression(expr) => {
+                Ok(format!("{}    {};\n",
+                    self.indent(indent),
+                    self.generate_expression_with_signatures(expr, extern_fn_signatures, extern_fn_return_types)?))
+            }
+            Statement::Block(stmts) => {
+                let mut output = format!("{}    {{\n", self.indent(indent));
+                for stmt in stmts {
+                    output.push_str(&self.generate_statement_with_signatures(stmt, indent + 1, extern_fn_signatures, extern_fn_return_types)?);
+                }
+                output.push_str(&format!("{}    }}\n", self.indent(indent)));
+                Ok(output)
+            }
+        }
     }
     
     fn generate_statement(&self, stmt: &Statement, indent: usize) -> String {
@@ -599,6 +737,215 @@ impl CodeGenerator {
         }
     }
     
+    fn generate_expression_with_signatures(&self, expr: &Expression, extern_fn_signatures: &std::collections::HashMap<String, Vec<Type>>, extern_fn_return_types: &std::collections::HashMap<String, Type>) -> Result<String> {
+        match expr {
+            Expression::Literal(lit) => {
+                match lit {
+                    Literal::Int(n) => Ok(n.to_string()),
+                    Literal::Float(n) => Ok(n.to_string()),
+                    Literal::Bool(b) => Ok(b.to_string()),
+                    Literal::String(s) => Ok(format!("\"{}\"", s)),
+                }
+            }
+            Expression::Variable(name) => Ok(name.clone()),
+            Expression::BinaryOp { op: BinaryOp::Pipe, left, right } => {
+                // Pipe operator: a |> f() -> f(a)
+                let left_str = self.generate_expression_with_signatures(left, extern_fn_signatures, extern_fn_return_types)?;
+                let right_str = self.generate_expression_with_signatures(right, extern_fn_signatures, extern_fn_return_types)?;
+                
+                // If right is a function call, inject left as first argument
+                if right_str.contains('(') {
+                    // Simple heuristic: replace first ( with (left_str, 
+                    Ok(right_str.replacen("(", &format!("({}", left_str), 1))
+                } else {
+                    // If not a call, treat as method: right(left)
+                    Ok(format!("{}({})", right_str, left_str))
+                }
+            }
+            Expression::BinaryOp { op, left, right } => {
+                let op_str = match op {
+                    BinaryOp::Add => "+",
+                    BinaryOp::Sub => "-",
+                    BinaryOp::Mul => "*",
+                    BinaryOp::Div => "/",
+                    BinaryOp::Mod => "%",
+                    BinaryOp::Eq => "==",
+                    BinaryOp::Ne => "!=",
+                    BinaryOp::Lt => "<",
+                    BinaryOp::Le => "<=",
+                    BinaryOp::Gt => ">",
+                    BinaryOp::Ge => ">=",
+                    BinaryOp::And => "&&",
+                    BinaryOp::Or => "||",
+                    BinaryOp::BitwiseOr => "|",
+                    BinaryOp::Pipe => unreachable!(), // Handled above
+                };
+                Ok(format!("({} {} {})", 
+                    self.generate_expression_with_signatures(left, extern_fn_signatures, extern_fn_return_types)?,
+                    op_str,
+                    self.generate_expression_with_signatures(right, extern_fn_signatures, extern_fn_return_types)?))
+            }
+            Expression::Call { name, args } => {
+                self.generate_call_expression(name, args, extern_fn_signatures, extern_fn_return_types)
+            }
+            Expression::NamedCall { name, named_args } => {
+                // Named arguments: f(a = 1, b = 2) -> f(1, 2) (positional order)
+                // For now, we'll generate them in the order provided
+                let mut arg_strs = Vec::new();
+                for (arg_name, arg_value) in named_args {
+                    arg_strs.push(format!("/* {} = */ {}", arg_name, self.generate_expression_with_signatures(arg_value, extern_fn_signatures, extern_fn_return_types)?));
+                }
+                Ok(format!("{}({})", name, arg_strs.join(", ")))
+            }
+            Expression::MemberAccess { object, member } => {
+                Ok(format!("{}.{}", 
+                    self.generate_expression_with_signatures(object, extern_fn_signatures, extern_fn_return_types)?,
+                    member))
+            }
+            Expression::MethodCall { object, method, type_args, args } => {
+                if method == "alloc_array" {
+                    // Generate: frame.alloc_array<T>(count)
+                    let obj_expr = self.generate_expression_with_signatures(object, extern_fn_signatures, extern_fn_return_types)?;
+                    if let Some(ref type_args_vec) = type_args {
+                        if type_args_vec.len() != 1 {
+                            panic!("alloc_array requires exactly one type argument");
+                        }
+                        let element_type = self.type_to_cpp(&type_args_vec[0]);
+                        let mut arg_strs = Vec::new();
+                        for arg in args {
+                            arg_strs.push(self.generate_expression_with_signatures(arg, extern_fn_signatures, extern_fn_return_types)?);
+                        }
+                        Ok(format!("{}.alloc_array<{}>({})", obj_expr, element_type, arg_strs.join(", ")))
+                    } else {
+                        panic!("alloc_array requires type argument");
+                    }
+                } else {
+                    // Regular method call
+                    let obj_expr = self.generate_expression_with_signatures(object, extern_fn_signatures, extern_fn_return_types)?;
+                    let mut arg_strs = Vec::new();
+                    for arg in args {
+                        arg_strs.push(self.generate_expression_with_signatures(arg, extern_fn_signatures, extern_fn_return_types)?);
+                    }
+                    if let Some(ref type_args_vec) = type_args {
+                        let type_strs: Vec<String> = type_args_vec.iter().map(|t| self.type_to_cpp(t)).collect();
+                        Ok(format!("{}.{}<{}>({})", obj_expr, method, type_strs.join(", "), arg_strs.join(", ")))
+                    } else {
+                        Ok(format!("{}.{}({})", obj_expr, method, arg_strs.join(", ")))
+                    }
+                }
+            }
+            Expression::Index { array, index } => {
+                Ok(format!("{}[{}]", 
+                    self.generate_expression_with_signatures(array, extern_fn_signatures, extern_fn_return_types)?,
+                    self.generate_expression_with_signatures(index, extern_fn_signatures, extern_fn_return_types)?))
+            }
+            Expression::UnaryOp { op, expr } => {
+                let op_str = match op {
+                    UnaryOp::Not => "!",
+                    UnaryOp::Neg => "-",
+                };
+                Ok(format!("{}{}", op_str, self.generate_expression_with_signatures(expr, extern_fn_signatures, extern_fn_return_types)?))
+            }
+            Expression::UnitSuffix { value, unit } => {
+                // Units are just comments in C++
+                Ok(format!("{} /* {} */", self.generate_expression_with_signatures(value, extern_fn_signatures, extern_fn_return_types)?, unit))
+            }
+            Expression::StructLiteral { name, fields } => {
+                let mut output = format!("{} {{", name);
+                for (i, (field_name, value)) in fields.iter().enumerate() {
+                    if i > 0 {
+                        output.push_str(", ");
+                    }
+                    output.push_str(&format!(".{} = {}", 
+                        field_name,
+                        self.generate_expression_with_signatures(value, extern_fn_signatures, extern_fn_return_types)?));
+                }
+                output.push_str("}");
+                Ok(output)
+            }
+            Expression::EnumLiteral(name) => {
+                // Enum literal: .VertexBuffer -> VertexBuffer (or appropriate enum value)
+                Ok(format!("{}", name))
+            }
+        }
+    }
+    
+    fn generate_call_expression(&self, name: &str, args: &[Expression], extern_fn_signatures: &std::collections::HashMap<String, Vec<Type>>, extern_fn_return_types: &std::collections::HashMap<String, Type>) -> Result<String> {
+        // Handle built-in print function
+        if name == "print" {
+            let mut output = String::from("std::cout");
+            for arg in args {
+                output.push_str(" << ");
+                output.push_str(&self.generate_expression_with_signatures(arg, extern_fn_signatures, extern_fn_return_types)?);
+            }
+            output.push_str(" << std::endl");
+            return Ok(output);
+        }
+        
+        // Handle ImGui function calls (convert to ImGui:: namespace)
+        if name.starts_with("ImGui_") || name.starts_with("ImGui::") {
+            let imgui_name = if name.starts_with("ImGui_") {
+                format!("ImGui::{}", &name[6..])
+            } else {
+                name.to_string()
+            };
+            let mut output = format!("{}(", imgui_name);
+            for (i, arg) in args.iter().enumerate() {
+                if i > 0 {
+                    output.push_str(", ");
+                }
+                output.push_str(&self.generate_expression_with_signatures(arg, extern_fn_signatures, extern_fn_return_types)?);
+            }
+            output.push_str(")");
+            return Ok(output);
+        }
+        
+        // Check if this is an extern function that expects const char* for string parameters
+        let mut arg_strs = Vec::new();
+        if let Some(param_types) = extern_fn_signatures.get(name) {
+            for (i, arg) in args.iter().enumerate() {
+                if i < param_types.len() {
+                    let param_type = &param_types[i];
+                    let arg_expr = self.generate_expression_with_signatures(arg, extern_fn_signatures, extern_fn_return_types)?;
+                    
+                    // If parameter expects const char* (String in extern context) but argument is std::string (String in non-extern context)
+                    // we need to add .c_str()
+                    if matches!(param_type, Type::String) {
+                        // Check if the argument is a string literal - if so, don't add .c_str() (it's already const char*)
+                        let is_string_literal = matches!(arg, Expression::Literal(Literal::String(_)));
+                        // Check if the argument is a function call that returns const char* (extern function returning string)
+                        let is_const_char_star_call = if let Expression::Call { name, .. } = arg {
+                            // If this is an extern function that returns string, it becomes const char* in C++
+                            // So we shouldn't add .c_str() to it
+                            extern_fn_return_types.get(name).map(|ret_type| matches!(ret_type, Type::String)).unwrap_or(false)
+                        } else {
+                            false
+                        };
+                        
+                        if is_string_literal || is_const_char_star_call {
+                            // String literal or function returning const char* - already const char*, no conversion needed
+                            arg_strs.push(arg_expr);
+                        } else {
+                            // It's a std::string variable or expression, add .c_str()
+                            arg_strs.push(format!("{}.c_str()", arg_expr));
+                        }
+                    } else {
+                        arg_strs.push(arg_expr);
+                    }
+                } else {
+                    arg_strs.push(self.generate_expression_with_signatures(arg, extern_fn_signatures, extern_fn_return_types)?);
+                }
+            }
+        } else {
+            // Not an extern function, generate arguments normally
+            for arg in args {
+                arg_strs.push(self.generate_expression_with_signatures(arg, extern_fn_signatures, extern_fn_return_types)?);
+            }
+        }
+        
+        Ok(format!("{}({})", name, arg_strs.join(", ")))
+    }
+    
     fn generate_expression(&self, expr: &Expression) -> String {
         match expr {
             Expression::Literal(lit) => {
@@ -655,36 +1002,7 @@ impl CodeGenerator {
                 format!("{}({})", op_str, self.generate_expression(expr))
             }
             Expression::Call { name, args } => {
-                // Handle built-in print function
-                if name == "print" {
-                    let mut output = String::from("std::cout");
-                    for arg in args {
-                        output.push_str(" << ");
-                        output.push_str(&self.generate_expression(arg));
-                    }
-                    output.push_str(" << std::endl");
-                    return output;
-                }
-                
-                // Handle ImGui function calls (convert to ImGui:: namespace)
-                if name.starts_with("ImGui_") || name.starts_with("ImGui::") {
-                    let imgui_name = if name.starts_with("ImGui_") {
-                        format!("ImGui::{}", &name[6..])
-                    } else {
-                        name.clone()
-                    };
-                    let mut output = format!("{}(", imgui_name);
-                    for (i, arg) in args.iter().enumerate() {
-                        if i > 0 {
-                            output.push_str(", ");
-                        }
-                        output.push_str(&self.generate_expression(arg));
-                    }
-                    output.push_str(")");
-                    return output;
-                }
-                
-                // Regular function call
+                // For the old generate_expression, we don't have signatures, so just generate normally
                 let mut arg_strs = Vec::new();
                 for arg in args {
                     arg_strs.push(self.generate_expression(arg));
@@ -1131,15 +1449,82 @@ impl CodeGenerator {
                         self.check_type_for_headers(&param.ty, needs_vulkan, needs_glfw, needs_math, needs_imgui);
                     }
                     self.check_type_for_headers(&f.return_type, needs_vulkan, needs_glfw, needs_math, needs_imgui);
+                    // Check for ImGui function calls in the function body
+                    self.scan_expression_for_imgui(&f.body, needs_imgui);
                 }
                 Item::ExternFunction(f) => {
                     for param in &f.params {
                         self.check_type_for_headers(&param.ty, needs_vulkan, needs_glfw, needs_math, needs_imgui);
                     }
                     self.check_type_for_headers(&f.return_type, needs_vulkan, needs_glfw, needs_math, needs_imgui);
+                    // Check if function name starts with heidic_imgui
+                    if f.name.starts_with("heidic_imgui") {
+                        *needs_imgui = true;
+                    }
                 }
                 _ => {}
             }
+        }
+    }
+    
+    fn scan_expression_for_imgui(&self, stmts: &[Statement], needs_imgui: &mut bool) {
+        for stmt in stmts {
+            match stmt {
+                Statement::Expression(expr) => {
+                    self.scan_expr_for_imgui(expr, needs_imgui);
+                }
+                Statement::If { condition, then_block, else_block } => {
+                    self.scan_expr_for_imgui(condition, needs_imgui);
+                    self.scan_expression_for_imgui(then_block, needs_imgui);
+                    if let Some(else_blk) = else_block {
+                        self.scan_expression_for_imgui(else_blk, needs_imgui);
+                    }
+                }
+                Statement::While { condition, body } => {
+                    self.scan_expr_for_imgui(condition, needs_imgui);
+                    self.scan_expression_for_imgui(body, needs_imgui);
+                }
+                Statement::Loop { body } => {
+                    self.scan_expression_for_imgui(body, needs_imgui);
+                }
+                Statement::Return(expr) => {
+                    if let Some(e) = expr {
+                        self.scan_expr_for_imgui(e, needs_imgui);
+                    }
+                }
+                Statement::Block(stmts) => {
+                    self.scan_expression_for_imgui(stmts, needs_imgui);
+                }
+                _ => {}
+            }
+        }
+    }
+    
+    fn scan_expr_for_imgui(&self, expr: &Expression, needs_imgui: &mut bool) {
+        match expr {
+            Expression::Call { name, args: _ } => {
+                if name.starts_with("heidic_imgui") {
+                    *needs_imgui = true;
+                }
+            }
+            Expression::BinaryOp { left, right, .. } => {
+                self.scan_expr_for_imgui(left, needs_imgui);
+                self.scan_expr_for_imgui(right, needs_imgui);
+            }
+            Expression::MemberAccess { object, .. } => {
+                self.scan_expr_for_imgui(object, needs_imgui);
+            }
+            Expression::MethodCall { object, args, .. } => {
+                self.scan_expr_for_imgui(object, needs_imgui);
+                for arg in args {
+                    self.scan_expr_for_imgui(arg, needs_imgui);
+                }
+            }
+            Expression::Index { array, index } => {
+                self.scan_expr_for_imgui(array, needs_imgui);
+                self.scan_expr_for_imgui(index, needs_imgui);
+            }
+            _ => {}
         }
     }
     

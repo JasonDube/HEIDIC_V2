@@ -992,6 +992,9 @@ fn main(): void {
         
         // Draw solid ground plane cube: 100m x 100m x 1m thick at y = -5m (-500 units)
         // 100 meters = 10000 units, 1 meter = 100 units, -5 meters = -500 units
+        // Ensure default white texture is loaded before drawing non-textured geometry
+        // This prevents texture color from tinting the ground plane
+        heidic_load_texture_for_rendering("default.bmp");
         heidic_draw_cube_grey(0.0, -500.0, 0.0, 0.0, 0.0, 0.0, 10000.0, 100.0, 10000.0);
         
         // Draw Ground Plane grid (large grid at y=-300) - only if grid is visible
@@ -1020,20 +1023,46 @@ fn main(): void {
         // Starting cubes removed - user can create cubes with Spacebar or Object menu
         
         // Draw Created Cubes (user-created via Spacebar) - Dynamic system
+        // Batch cubes by texture: when texture changes, flush current batch and start new one
+        // This ensures each cube gets the correct texture while maintaining efficient batching
         let cube_draw_index: i32 = 0;
         let total_cubes: i32 = heidic_get_cube_total_count();
+        let current_texture: string = "";
+        let first_cube: i32 = 1;
+        
         while cube_draw_index < total_cubes {
             if heidic_get_cube_active(cube_draw_index) == 1 {
+                let cube_texture_name: string = heidic_get_cube_texture_name(cube_draw_index);
+                // Use default texture if empty
+                if cube_texture_name == "" {
+                    cube_texture_name = "default.bmp";
+                }
+                
+                // If texture changed, flush previous batch and start new one
+                if first_cube == 0 && cube_texture_name != current_texture {
+                    // Flush current batch (draw all cubes with current_texture)
+                    heidic_flush_colored_cubes();
+                    // Load new texture
+                    heidic_load_texture_for_rendering(cube_texture_name);
+                    current_texture = cube_texture_name;
+                } else {
+                    if first_cube == 1 {
+                        // First cube - load its texture
+                        heidic_load_texture_for_rendering(cube_texture_name);
+                        current_texture = cube_texture_name;
+                        first_cube = 0;
+                    }
+                }
+                
                 let cube_x: f32 = heidic_get_cube_x(cube_draw_index);
                 let cube_y: f32 = heidic_get_cube_y(cube_draw_index);
                 let cube_z: f32 = heidic_get_cube_z(cube_draw_index);
                 let cube_sx: f32 = heidic_get_cube_sx(cube_draw_index);
                 let cube_sy: f32 = heidic_get_cube_sy(cube_draw_index);
                 let cube_sz: f32 = heidic_get_cube_sz(cube_draw_index);
-                let cube_r: f32 = heidic_get_cube_r(cube_draw_index);
-                let cube_g: f32 = heidic_get_cube_g(cube_draw_index);
-                let cube_b: f32 = heidic_get_cube_b(cube_draw_index);
-                heidic_draw_cube_colored(cube_x, cube_y, cube_z, 0.0, 0.0, 0.0, cube_sx, cube_sy, cube_sz, cube_r, cube_g, cube_b);
+                
+                // Draw cube with white color (1,1,1) so texture displays at full brightness without tinting
+                heidic_draw_cube_colored(cube_x, cube_y, cube_z, 0.0, 0.0, 0.0, cube_sx, cube_sy, cube_sz, 1.0, 1.0, 1.0);
                 
                 // Draw wireframe outline for selected cubes
                 if heidic_is_cube_selected(cube_draw_index) == 1 {
@@ -1043,6 +1072,9 @@ fn main(): void {
             }
             cube_draw_index = cube_draw_index + 1;
         }
+        
+        // Flush any remaining batched cubes at the end (draw final texture group)
+        heidic_flush_colored_cubes();
         
         // ============================================================================
         // RAYCASTING
@@ -1696,7 +1728,6 @@ fn main(): void {
                 heidic_load_texture_list();
                 
                 let texture_count: i32 = heidic_get_texture_count();
-                let selected_texture: string = heidic_get_selected_texture();
                 
                 // Display textures in a grid as image previews
                 let texture_index: i32 = 0;
@@ -1713,7 +1744,8 @@ fn main(): void {
                     // Create unique ID for button
                     heidic_imgui_push_id(texture_index);
                     
-                    // Check if this texture is selected
+                    // Check if this texture is selected (get fresh value each iteration)
+                    let selected_texture: string = heidic_get_selected_texture();
                     let is_selected: i32 = 0;
                     if selected_texture == texture_name {
                         is_selected = 1;
@@ -1732,8 +1764,9 @@ fn main(): void {
                             tint_b = 0.5;  // Yellow tint for selected
                         }
                         
-                        // Create button ID
-                        let button_id: string = "##tex_btn_";
+                        // Create unique button ID using texture index
+                        // Use texture_name as part of ID to ensure uniqueness
+                        let button_id: string = texture_name;
                         // Use ImageButton with tint
                         if heidic_imgui_image_button(button_id, texture_id, swatch_size, swatch_size, tint_r, tint_g, tint_b, tint_a) == 1 {
                             // Clicked: select this texture

@@ -688,17 +688,216 @@ rayDir = glm::normalize(worldFarPoint - rayOrigin);
 
 This concludes the "Picking Hell" saga. The implementation is now robust and follows correct Vulkan coordinate conventions throughout the pipeline.
 
-## Current Status (Nov 29, 2025)
+### 12. Gateway Editor v1: Mouse Look, Camera Controls, Cube Creation, and Level File System (Dec 2024)
+**AI Assistant:** Auto (Claude Sonnet 4.5)
+**Date:** December 2024
+
+Implemented comprehensive camera controls, dynamic cube creation via ImGui menu, and a complete level save/load system using native file dialogs.
+
+#### Goal
+Enhance the Gateway Editor with:
+1. Mouse look camera controls for walk mode (FPS-style rotation)
+2. Zoom and panning controls for top-down camera mode
+3. Dynamic cube creation through ImGui menu
+4. Native file dialogs for saving and loading `.eden` level files
+
+#### Features Implemented
+
+**1. Mouse Look Camera for Walk Mode**
+- **Implementation**: Added mouse delta tracking to control player rotation (yaw and pitch)
+- **Functions Added**:
+  - `heidic_get_mouse_delta_x/y()`: Get mouse movement delta from previous frame
+  - `heidic_set_cursor_mode()`: Capture/release mouse cursor for FPS-style control
+- **Controls**:
+  - Mouse movement controls yaw (horizontal rotation) and pitch (vertical rotation)
+  - Mouse cursor is captured when in walk mode for seamless rotation
+  - Pitch is clamped between -90° and 90° to prevent gimbal lock
+- **Technical Details**:
+  - Mouse delta is accumulated each frame and applied to player rotation
+  - Horizontal mouse movement controls yaw (Y-axis rotation)
+  - Vertical mouse movement controls pitch (X-axis rotation)
+  - Mouse sensitivity is configurable via `mouse_sensitivity` variable
+- **Challenge**: Initial implementation had mouse look going in the wrong direction
+  - **Solution**: Reversed the sign of `mouse_delta_x` when updating yaw to match natural camera movement
+
+**2. Top-Down Camera Zoom and Panning**
+- **Zoom Controls**:
+  - **ZBrush-style Zoom**: Ctrl+Right Mouse Button drag for zooming in/out
+  - Alternative: `[` and `]` keys for zoom (implemented as fallback)
+  - Zoom adjusts `topdown_cam_height` (camera Y position)
+  - Zoom speed is configurable and clamped to reasonable limits
+- **Panning Controls**:
+  - Middle Mouse Button drag for panning (translating camera across XZ plane)
+  - Panning speed is configurable (default: 4.0 units per pixel)
+  - Pan directions are reversed to match intuitive camera movement
+- **Technical Details**:
+  - Mouse button state tracking to detect drag operations
+  - Pan delta calculated from mouse position change during drag
+  - Camera position updated each frame based on pan offset
+  - Zoom uses mouse delta Y during Ctrl+RMB drag
+- **Challenges**:
+  - **Challenge 1**: MMB scroll wheel zoom not working initially
+    - **Status**: Documented as known issue, low priority
+    - **Workaround**: Implemented Ctrl+RMB drag zoom and `[`/`]` key zoom
+  - **Challenge 2**: Pan direction felt unnatural
+    - **Solution**: Reversed pan directions (up/down and left/right) to match user expectations
+  - **Challenge 3**: Zoom speed too fast with `[`/`]` keys
+    - **Solution**: Reduced zoom speed multiplier for keyboard controls
+
+**3. Dynamic Cube Creation via ImGui Menu**
+- **Implementation**: Added "Object" menu to main menu bar with "Add Cube" option
+- **Functionality**:
+  - Creates a new cube at the origin (0, 0, 0) when "Add Cube" is selected
+  - Automatically selects the newly created cube and attaches the move gizmo
+  - Cubes are stored in a dynamic `std::vector` to support arbitrary number of objects
+- **Functions Added**:
+  - `heidic_create_cube()`: Creates a new cube and returns its index
+  - `heidic_imgui_begin_main_menu_bar()`: Start main menu bar
+  - `heidic_imgui_begin_menu()`: Start a submenu
+  - `heidic_imgui_menu_item()`: Menu item that returns 1 if clicked
+  - `heidic_imgui_separator()`: Visual separator in menu
+- **Technical Details**:
+  - Cubes are stored in `g_createdCubes` vector with position, rotation, and scale
+  - Each cube has a unique index (0 = player, 1+ = created cubes)
+  - Created cubes are rendered each frame alongside the player cube
+  - Selection system works with dynamically created cubes
+- **Challenge**: Initial implementation had limited cube count
+  - **Solution**: Switched from fixed-size array to `std::vector` for unlimited cube creation
+
+**4. Level File System with Native File Dialogs**
+- **File Format**: `.eden` files stored as simple text format
+  - Each line represents a cube: `cube <index> <x> <y> <z> <rx> <ry> <rz> <sx> <sy> <sz>`
+  - Saved cubes include all transform data (position, rotation, scale)
+- **Save System**:
+  - "Save Level As..." menu item opens native Windows file dialog
+  - Dialog filters for `.eden` files only
+  - Saves all created cubes to the selected file path
+- **Load System**:
+  - "Open Level..." menu item opens native Windows file dialog
+  - Loads cubes from selected `.eden` file
+  - Clears existing cubes before loading new ones
+  - Restores all cube transforms from file
+- **Functions Added**:
+  - `heidic_show_save_dialog()`: Shows native save dialog, returns 1 if saved
+  - `heidic_show_open_dialog()`: Shows native open dialog, returns 1 if loaded
+  - `heidic_save_level()`: Saves cubes to file path (existing function, now called from dialog)
+  - `heidic_load_level()`: Loads cubes from file path (existing function, now called from dialog)
+- **Technical Details**:
+  - Uses `nativefiledialog-extended` library for cross-platform native dialogs
+  - Windows implementation uses COM APIs (IFileSaveDialog, IFileOpenDialog)
+  - Dialog is modal and blocks main thread until user closes it (expected behavior)
+  - Parent window handle passed to dialog for proper modal behavior
+  - COM initialized before showing dialog and cleaned up after
+- **Challenges**:
+  - **Challenge 1**: Program became unresponsive when showing dialog
+    - **Root Cause**: COM not initialized before using file dialog APIs
+    - **Solution**: Added `CoInitializeEx()` call before showing dialog, with proper cleanup
+  - **Challenge 2**: Missing COM GUIDs during linking
+    - **Error**: `undefined reference to CLSID_FileSaveDialog`, `IID_IFileSaveDialog`, etc.
+    - **Solution**: Added `-luuid` library to link command (provides COM GUIDs)
+  - **Challenge 3**: Missing COM functions during linking
+    - **Error**: `undefined reference to CoInitializeEx`, `CoCreateInstance`, etc.
+    - **Solution**: Added `-lole32` library to link command (provides COM APIs)
+  - **Challenge 4**: GLFW native window handle not available
+    - **Error**: `glfwGetWin32Window was not declared in this scope`
+    - **Solution**: Added `#define GLFW_EXPOSE_NATIVE_WIN32` and included `glfw3native.h`
+  - **Challenge 5**: Level browsing UI complexity
+    - **Initial Approach**: Created custom level browsing UI with input fields and button lists
+    - **Problem**: Persistent type mismatch issues between HEIDIC `string` type and C++ `const char*`
+    - **Solution**: Removed custom UI entirely, replaced with native file dialogs for cleaner UX
+    - **Result**: Simpler, more professional interface using OS-native dialogs
+
+#### Implementation Details
+
+**Mouse Look System**:
+1. Track mouse delta each frame using `glfwGetCursorPos()` and previous position
+2. Apply delta to player rotation with sensitivity multiplier
+3. Clamp pitch to prevent gimbal lock
+4. Update camera rotation to match player rotation
+
+**Camera Controls**:
+- **Walk Mode**: Mouse look for rotation, WASD for movement
+- **Top-Down Mode**: Ctrl+RMB drag for zoom, MMB drag for panning, `[`/`]` keys for zoom
+
+**Cube Management**:
+- Dynamic storage using `std::vector<CubeData>`
+- Each cube has unique index for selection and gizmo attachment
+- Cubes persist across frames and can be saved/loaded
+
+**File I/O Pipeline**:
+1. User clicks "Save Level As..." or "Open Level..."
+2. Native file dialog appears (modal, blocks main thread)
+3. User selects file path
+4. Dialog returns with file path or cancellation
+5. `heidic_save_level()` or `heidic_load_level()` called with path
+6. File written/read, cubes saved/loaded
+
+#### Build System Updates
+
+**Added Native File Dialog Library**:
+- Downloaded `nativefiledialog-extended` (single header + source file)
+- Added `third_party/nfd.h` and `third_party/nfd_win.cpp`
+- Updated build scripts to compile `nfd_win.cpp` and link required libraries:
+  - `-lole32` (COM APIs)
+  - `-luuid` (COM GUIDs)
+
+**Build Script Changes**:
+- `build_gateway_editor_v1.bat`: Added `nfd_win.cpp` compilation and `-lole32 -luuid` to link command
+- `build.ps1`: Added `nfd_win.cpp` compilation and `-lole32 -luuid` to link command
+
+#### Files Created/Modified
+
+- **Modified**: `examples/gateway_editor_v1/gateway_editor_v1.hd`
+  - Added mouse look camera controls
+  - Added top-down camera zoom and panning
+  - Added "Object" menu with "Add Cube" functionality
+  - Updated "File" menu to use native file dialogs
+- **Modified**: `vulkan/eden_vulkan_helpers.cpp/h`
+  - Added `heidic_get_mouse_delta_x/y()` functions
+  - Added `heidic_set_cursor_mode()` function
+  - Added `heidic_create_cube()` function
+  - Added `heidic_show_save_dialog()` and `heidic_show_open_dialog()` functions
+  - Added COM initialization/cleanup for file dialogs
+  - Added GLFW native window handle support
+- **Modified**: `stdlib/eden.hd`
+  - Added extern declarations for new functions
+  - Removed level browsing functions (replaced with native dialogs)
+- **Modified**: `build_gateway_editor_v1.bat`
+  - Added `nfd_win.cpp` compilation
+  - Added `-lole32 -luuid` to link command
+- **Modified**: `build.ps1`
+  - Added `nfd_win.cpp` compilation
+  - Added `-lole32 -luuid` to link command
+- **Created**: `third_party/nfd.h` (nativefiledialog-extended header)
+- **Created**: `third_party/nfd_win.cpp` (Windows implementation)
+
+#### Result
+
+The Gateway Editor now has:
+- ✅ **Full mouse look camera** for immersive walk mode
+- ✅ **Intuitive zoom and panning** for top-down editing
+- ✅ **Dynamic cube creation** through professional ImGui menu
+- ✅ **Native file dialogs** for saving and loading levels
+- ✅ **Complete level persistence** with `.eden` file format
+
+The editor is now a fully functional level editor with professional UI controls and file management capabilities.
+
+## Current Status (Dec 2024)
 - **Compiler**: Working with updated C ABI support for strings.
 - **Renderer**: Vulkan pipeline fully functional for 3D primitives (Triangles and Lines), with complete texture support including transparency. Unified shader supports both colored geometry and textured meshes.
 - **Model Loading**: ASCII model format parser with automatic unit conversion and UV mapping.
 - **Debug Infrastructure**: Validation layers and debug messenger enabled in debug builds for comprehensive error detection.
-- **Tools**: ImGui integrated with toggleable visibility and float display helpers.
-- **Build System**: Robust batch script build system with automatic dependency detection and linking.
-- **Raycasting**: Fully working mouse picking and selection system.
+- **Tools**: ImGui integrated with toggleable visibility, float display helpers, and full menu bar support.
+- **Build System**: Robust batch script build system with automatic dependency detection and linking, including native file dialog library support.
+- **Raycasting**: Fully working mouse picking and selection system with infinite distance support.
+- **Camera Controls**: 
+  - Mouse look camera for walk mode (FPS-style rotation)
+  - Top-down camera with zoom (Ctrl+RMB drag) and panning (MMB drag)
+- **Level Editor**: Complete level save/load system with native file dialogs and `.eden` file format.
+- **Dynamic Object Management**: Unlimited cube creation through ImGui menu with full transform support.
 - **Examples**: 
   - `examples/top_down`: Programmable cube with colored faces, colored debug axes, camera controls, and full WASD player movement system with rotation-relative controls.
   - `examples/ascii_import_test`: ASCII model import with texture application and transparency support.
   - `examples/spinning_triangle`: Basic triangle rendering test.
   - `examples/fps_camera`: New example cloned from `top_down` with working build system.
-  - `examples/gateway_editor_v1`: Advanced editor example with ray picking and gizmos.
+  - `examples/gateway_editor_v1`: Full-featured level editor with mouse look, camera controls, dynamic cube creation, ray picking, gizmos, and native file dialogs for level save/load.

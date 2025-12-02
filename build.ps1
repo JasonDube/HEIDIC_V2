@@ -165,6 +165,37 @@ if (Test-Path $helpersCppPath) {
     Write-Host "Warning: eden_vulkan_helpers.cpp not found!" -ForegroundColor Yellow
 }
 
+# Compile nfd_win.cpp to object file (incremental)
+$nfdCppPath = Join-Path $projectRoot "third_party\nfd_win.cpp"
+$nfdObjPath = Join-Path $objDir "nfd_win.o"
+
+if (Test-Path $nfdCppPath) {
+    $needsCompile = $true
+    if (Test-Path $nfdObjPath) {
+        $nfdCppTime = (Get-Item $nfdCppPath).LastWriteTime
+        $nfdObjTime = (Get-Item $nfdObjPath).LastWriteTime
+        if ($nfdCppTime -lt $nfdObjTime) {
+            $needsCompile = $false
+        }
+    }
+    
+    if ($needsCompile) {
+        Write-Host "Compiling nfd_win.cpp" -ForegroundColor Cyan
+        $nfdFlags = $commonFlags + @("-c", $nfdCppPath, "-o", $nfdObjPath)
+        & "g++" $nfdFlags
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Failed to compile nfd_win.cpp!" -ForegroundColor Red
+            Pop-Location
+            exit 1
+        }
+    } else {
+        Write-Host "Skipping nfd_win.cpp (up to date)" -ForegroundColor Gray
+    }
+    $vulkanObjFiles += $nfdObjPath
+} else {
+    Write-Host "Warning: nfd_win.cpp not found!" -ForegroundColor Yellow
+}
+
 # Compile ImGui source files to object files if enabled
 if ($imguiEnabled) {
     $imguiFiles = @(
@@ -229,6 +260,8 @@ if ($glfwPath -and $glfwLibFound) {
     $linkArgs += "-lgdi32"
     $linkArgs += "-luser32"
     $linkArgs += "-lshell32"
+    $linkArgs += "-lole32"  # Required for nativefiledialog-extended (COM APIs)
+    $linkArgs += "-luuid"   # Required for COM GUIDs (CLSID_FileSaveDialog, etc.)
 }
 
 & "g++" $linkArgs
