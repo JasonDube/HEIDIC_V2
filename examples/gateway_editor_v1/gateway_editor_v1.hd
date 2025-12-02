@@ -68,8 +68,8 @@ fn main(): void {
     let f1_was_pressed: i32 = 0;
     
     // Camera Mode: 0 = Top-Down, 1 = FPS
-    let camera_mode: i32 = 0; // Start in Top-Down mode
-    let c_was_pressed: i32 = 0;
+    let camera_mode: i32 = 1; // Start in Walk mode (FPS)
+    let tab_was_pressed: i32 = 0;  // Tab key for camera toggle
     
     // Player cube visibility: INVISIBLE in walk mode, VISIBLE in top-down mode
     let player_cube_visible: i32 = VISIBLE;
@@ -110,6 +110,9 @@ fn main(): void {
     // Delete key state tracking
     let delete_was_pressed: i32 = 0;
     
+    // C key state tracking (for combining cubes - separate from camera toggle C key)
+    let combine_c_was_pressed: i32 = 0;
+    
     // Level name buffer for input (managed by C++ side)
     // We'll use heidic_get_level_name() to get the current name
     
@@ -140,9 +143,33 @@ fn main(): void {
     while heidic_window_should_close(window) == 0 {
         heidic_poll_events();
         
-        if heidic_is_key_pressed(window, 256) == 1 { // ESC
-            heidic_set_window_should_close(window, 1);
+        // Check if we're editing a combination name - if so, block all input except Enter/Escape
+        let is_editing_combination: i32 = heidic_get_editing_combination_id();
+        let block_input: i32 = 0;
+        if is_editing_combination >= 0 {
+            block_input = 1;
         }
+        
+        // Get mouse position and ray (always available for debug panel)
+        let mouse_x: f32 = heidic_get_mouse_x(window);
+        let mouse_y: f32 = heidic_get_mouse_y(window);
+        
+        // Get mouse ray
+        let ray_origin: Vec3 = heidic_get_mouse_ray_origin(window);
+        let ray_dir: Vec3 = heidic_get_mouse_ray_dir(window);
+        
+        // ESC always works (to close window)
+        if heidic_is_key_pressed(window, 256) == 1 { // ESC
+            // If editing, stop editing instead of closing window
+            if is_editing_combination >= 0 {
+                heidic_stop_editing_combination_name();
+            } else {
+                heidic_set_window_should_close(window, 1);
+            }
+        }
+        
+        // Skip all other input if we're editing
+        if block_input == 0 {
         
         // F1 Toggle Logic (290 is F1)
         let f1_is_pressed: i32 = heidic_is_key_pressed(window, 290);
@@ -159,10 +186,10 @@ fn main(): void {
             f1_was_pressed = 0;
         }
         
-        // C Key Toggle Logic (67 is C) - Switch between Top-Down and FPS camera
-        let c_is_pressed: i32 = heidic_is_key_pressed(window, 67);
-        if c_is_pressed == 1 {
-            if c_was_pressed == 0 {
+        // Tab Key Toggle Logic (258 is Tab) - Switch between Top-Down and FPS camera
+        let tab_is_pressed: i32 = heidic_is_key_pressed(window, 258);
+        if tab_is_pressed == 1 {
+            if tab_was_pressed == 0 {
                 if camera_mode == 0 {
                     camera_mode = 1; // Switch to FPS
                     // Set cursor mode based on mouse_mode
@@ -180,10 +207,10 @@ fn main(): void {
                         heidic_set_cursor_mode(window, 0); // 0 = normal (visible)
                     }
                 }
-                c_was_pressed = 1;
+                tab_was_pressed = 1;
             }
         } else {
-            c_was_pressed = 0;
+            tab_was_pressed = 0;
         }
         
         // Alt + Mouse Drag for Camera Dolly (works in both modes)
@@ -661,6 +688,26 @@ fn main(): void {
             space_was_pressed = 0;
         }
         
+        // C key (67) - Combine selected cubes
+        let c_is_pressed: i32 = heidic_is_key_pressed(window, 67);
+        
+        if c_is_pressed == 1 {
+            if combine_c_was_pressed == 0 {
+                // Check if we have any cubes selected
+                let selection_count: i32 = heidic_get_selection_count();
+                if selection_count > 0 {
+                    print("C pressed - Combining selected cubes\n");
+                    heidic_combine_selected_cubes();
+                    print("Combination complete\n");
+                } else {
+                    // No selection, silently fail (do nothing)
+                }
+            }
+            combine_c_was_pressed = 1;
+        } else {
+            combine_c_was_pressed = 0;
+        }
+        
         // Delete key (261) - Delete selected cube
         let delete_is_pressed: i32 = heidic_is_key_pressed(window, 261);
         if delete_is_pressed == 1 {
@@ -987,6 +1034,12 @@ fn main(): void {
                 let cube_g: f32 = heidic_get_cube_g(cube_draw_index);
                 let cube_b: f32 = heidic_get_cube_b(cube_draw_index);
                 heidic_draw_cube_colored(cube_x, cube_y, cube_z, 0.0, 0.0, 0.0, cube_sx, cube_sy, cube_sz, cube_r, cube_g, cube_b);
+                
+                // Draw wireframe outline for selected cubes
+                if heidic_is_cube_selected(cube_draw_index) == 1 {
+                    // Draw wireframe outline (slightly larger than cube, white color)
+                    heidic_draw_cube_wireframe(cube_x, cube_y, cube_z, 0.0, 0.0, 0.0, cube_sx * 1.01, cube_sy * 1.01, cube_sz * 1.01, 1.0, 1.0, 1.0);
+                }
             }
             cube_draw_index = cube_draw_index + 1;
         }
@@ -994,14 +1047,6 @@ fn main(): void {
         // ============================================================================
         // RAYCASTING
         // ============================================================================
-        
-        // Get mouse position
-        let mouse_x: f32 = heidic_get_mouse_x(window);
-        let mouse_y: f32 = heidic_get_mouse_y(window);
-        
-        // Get mouse ray
-        let ray_origin: Vec3 = heidic_get_mouse_ray_origin(window);
-        let ray_dir: Vec3 = heidic_get_mouse_ray_dir(window);
         
         // Yellow debug line - draw from camera to 50km out along ray
         // This helps visualize where the ray is pointing
@@ -1367,6 +1412,14 @@ fn main(): void {
         // Selection: Click to select cubes - test ALL cubes
         // Only allow selection when mouse_mode is enabled AND Alt is NOT pressed (Alt+Click is for orbit, not selection)
         if mouse_mode == 1 && mouse_left_pressed == 1 && alt_pressed == 0 {
+            // Check if Ctrl is pressed for multi-select
+            let ctrl_left_pressed: i32 = heidic_is_key_pressed(window, 341);
+            let ctrl_right_pressed: i32 = heidic_is_key_pressed(window, 345);
+            let ctrl_pressed: i32 = 0;
+            if ctrl_left_pressed == 1 || ctrl_right_pressed == 1 {
+                ctrl_pressed = 1;
+            }
+            
             // Only check gizmo interaction if we're NOT doing a fresh click
             // This allows selection even if gizmo axes are being hovered
             let interacting: i32 = 0;
@@ -1378,11 +1431,10 @@ fn main(): void {
             if interacting == 0 {
                 if mouse_left_was_pressed == 0 {
                     // Just clicked - test raycast against all cubes and find closest hit
-                    has_selection = 0;
-                    selected_cube_index = -1.0;
                     // Initialize closest_dist to a very large number (squared distance)
                     // 100,000,000,000.0 is roughly 316,000 units (3.16 km) distance
-                    let closest_dist: f32 = 100000000000.0; 
+                    let closest_dist: f32 = 100000000000.0;
+                    let hit_cube_index: i32 = -1;
                     
                     // Player cube is NOT selectable (it's invisible in walk mode and shouldn't interfere)
                     // Skip player cube selection test
@@ -1405,39 +1457,56 @@ fn main(): void {
                                 let dist: f32 = (hit_point.x - ray_origin.x) * (hit_point.x - ray_origin.x) + (hit_point.y - ray_origin.y) * (hit_point.y - ray_origin.y) + (hit_point.z - ray_origin.z) * (hit_point.z - ray_origin.z);
                                 if dist < closest_dist {
                                     closest_dist = dist;
-                                    has_selection = 1;
-                                    // Map cube index to selected_cube_index: cube index 0 -> selected index 2.0, etc.
-                                    let cube_index_f: f32 = heidic_int_to_float(cube_test_index);
-                                    selected_cube_index = cube_index_f + 2.0;
-                                    selected_cube_x = test_cube_x;
-                                    selected_cube_y = test_cube_y;
-                                    selected_cube_z = test_cube_z;
-                                    selected_cube_sx = test_cube_sx;
-                                    selected_cube_sy = test_cube_sy;
-                                    selected_cube_sz = test_cube_sz;
-                                    
-                                    // Initialize dolly orbit state for new selection
-                                    let target_pos: Vec3 = heidic_vec3(test_cube_x, test_cube_y, test_cube_z);
-                                    let current_cam_pos: Vec3 = camera_pos;
-                                    let calculated_distance: f32 = heidic_vec3_distance(current_cam_pos, target_pos);
-                                    
-                                    // Use calculated distance if reasonable, otherwise use default
-                                    if calculated_distance > 10.0 && calculated_distance < 100000.0 {
-                                        dolly_orbit_distance = calculated_distance;
-                                    } else {
-                                        dolly_orbit_distance = 2000.0; // Default: 20 meters (closer than before)
-                                    }
-                                    dolly_orbit_azimuth = 0.0; // Start from default angle
-                                    dolly_orbit_elevation = 45.0; // 45 degree elevation
+                                    hit_cube_index = cube_test_index;
                                 }
                             }
                         }
                         cube_test_index = cube_test_index + 1;
                     }
                     
-                    // Player cube is not selectable, so no dolly orbit initialization needed
-                    
-                    // All starting cubes removed - only dynamically created cubes are selectable
+                    // Handle selection based on Ctrl state
+                    if hit_cube_index >= 0 {
+                        if ctrl_pressed == 1 {
+                            // Ctrl+Click: Toggle multi-select
+                            heidic_toggle_selection(hit_cube_index);
+                        } else {
+                            // Regular click: Clear selection and select only this cube
+                            heidic_clear_selection();
+                            heidic_add_to_selection(hit_cube_index);
+                        }
+                        
+                        // Update single selection state for gizmo compatibility
+                        let cube_index_f: f32 = heidic_int_to_float(hit_cube_index);
+                        selected_cube_index = cube_index_f + 2.0;
+                        selected_cube_x = heidic_get_cube_x(hit_cube_index);
+                        selected_cube_y = heidic_get_cube_y(hit_cube_index);
+                        selected_cube_z = heidic_get_cube_z(hit_cube_index);
+                        selected_cube_sx = heidic_get_cube_sx(hit_cube_index);
+                        selected_cube_sy = heidic_get_cube_sy(hit_cube_index);
+                        selected_cube_sz = heidic_get_cube_sz(hit_cube_index);
+                        has_selection = 1;
+                        
+                        // Initialize dolly orbit state for new selection
+                        let target_pos: Vec3 = heidic_vec3(selected_cube_x, selected_cube_y, selected_cube_z);
+                        let current_cam_pos: Vec3 = camera_pos;
+                        let calculated_distance: f32 = heidic_vec3_distance(current_cam_pos, target_pos);
+                        
+                        // Use calculated distance if reasonable, otherwise use default
+                        if calculated_distance > 10.0 && calculated_distance < 100000.0 {
+                            dolly_orbit_distance = calculated_distance;
+                        } else {
+                            dolly_orbit_distance = 2000.0; // Default: 20 meters
+                        }
+                        dolly_orbit_azimuth = 0.0;
+                        dolly_orbit_elevation = 45.0;
+                    } else {
+                        // Clicked on nothing - clear selection if not Ctrl+Click
+                        if ctrl_pressed == 0 {
+                            heidic_clear_selection();
+                            has_selection = 0;
+                            selected_cube_index = -1.0;
+                        }
+                    }
                     
                     mouse_left_was_pressed = 1;
                 }
@@ -1447,7 +1516,9 @@ fn main(): void {
         }
         
         
-        // Show selection and Gizmo
+        }  // End of block_input check
+        
+        // Show selection and Gizmo (always show, even when editing)
         if has_selection == 1 {
             // Draw wireframe overlay (black)
             heidic_draw_cube_wireframe(selected_cube_x, selected_cube_y, selected_cube_z, 0.0, 0.0, 0.0, selected_cube_sx * 1.01, selected_cube_sy * 1.01, selected_cube_sz * 1.01, 0.0, 0.0, 0.0);
@@ -1469,23 +1540,225 @@ fn main(): void {
             }
         }
         
-        // Test window for docking
+        // Codex Of Forms - Show combinations and uncombined cubes
         if show_debug == 1 {
-            heidic_imgui_begin("Test Window");
-            heidic_imgui_text("=== TEST WINDOW ===");
-            heidic_imgui_text("This is a test window for docking!");
-            heidic_imgui_text("Try docking this to the Debug Panel.");
-            heidic_imgui_text_float("Selected Index", selected_cube_index);
-            heidic_imgui_text_float("Selected X", selected_cube_x);
-            heidic_imgui_text_float("Selected Y", selected_cube_y);
-            heidic_imgui_text_float("Selected Z", selected_cube_z);
+            if heidic_imgui_begin("Codex Of Forms") == 1 {
+                let combination_count: i32 = heidic_get_combination_count();
+                let total_cube_count: i32 = heidic_get_cube_total_count();
+                
+                // Global cube display index (sequential across all cubes)
+                let global_cube_display_index: i32 = 1;
+                
+                // First, show all combinations with expand/collapse
+                let combo_id: i32 = 0;
+                while combo_id < combination_count {
+                    // Push unique ID for this combination to avoid ID conflicts
+                    heidic_imgui_push_id(combo_id);
+                    
+                    // Check if we're editing this combination
+                    let editing_id: i32 = heidic_get_editing_combination_id();
+                    let is_editing_this: i32 = 0;
+                    if editing_id == combo_id {
+                        is_editing_this = 1;
+                    }
+                    
+                    // Get combination name (e.g., "combination_001")
+                    let combo_name: string = heidic_format_combination_name(combo_id);
+                    
+                    // Show expand/collapse button (with unique ID)
+                    let is_expanded: i32 = heidic_is_combination_expanded(combo_id);
+                    let expand_button_text: string = "+";
+                    if is_expanded == 1 {
+                        expand_button_text = "-";
+                    }
+                    if heidic_imgui_button(expand_button_text) == 1 {
+                        heidic_toggle_combination_expanded(combo_id);
+                    }
+                    heidic_imgui_same_line();
+                    
+                    // Always show input field next to combination name (no click needed)
+                    // This function handles the buffer internally and returns 1 when Enter is pressed
+                    let enter_pressed: i32 = heidic_imgui_input_text_combination_simple(combo_id);
+                    // Enter pressed is handled inside the function (saves automatically)
+                    
+                    // If expanded, show cubes in this combination
+                    if is_expanded == 1 {
+                        let cube_index: i32 = 0;
+                        
+                        while cube_index < total_cube_count {
+                            if heidic_get_cube_active(cube_index) == 1 {
+                                if heidic_get_cube_combination_id(cube_index) == combo_id {
+                                    // Push unique ID for this cube
+                                    heidic_imgui_push_id(cube_index);
+                                    
+                                    // This cube belongs to this combination
+                                    // Use global sequential numbering
+                                    let cube_name: string = heidic_format_cube_name_with_index(global_cube_display_index);
+                                    
+                                    // Make cube name clickable to select it
+                                    if heidic_is_cube_selected(cube_index) == 1 {
+                                        // Selected: show in bold (yellow)
+                                        heidic_imgui_text_bold(cube_name);
+                                    } else {
+                                        // Not selected: show in red and make clickable
+                                        if heidic_imgui_selectable_colored(cube_name, 1.0, 0.0, 0.0, 1.0) == 1 {
+                                            // Clicked: select this cube (clear others first if not Ctrl+Click)
+                                            // For now, just select this one (can add Ctrl check later)
+                                            heidic_clear_selection();
+                                            heidic_add_to_selection(cube_index);
+                                            
+                                            // Update single selection state for gizmo
+                                            let cube_index_f: f32 = heidic_int_to_float(cube_index);
+                                            selected_cube_index = cube_index_f + 2.0;
+                                            selected_cube_x = heidic_get_cube_x(cube_index);
+                                            selected_cube_y = heidic_get_cube_y(cube_index);
+                                            selected_cube_z = heidic_get_cube_z(cube_index);
+                                            selected_cube_sx = heidic_get_cube_sx(cube_index);
+                                            selected_cube_sy = heidic_get_cube_sy(cube_index);
+                                            selected_cube_sz = heidic_get_cube_sz(cube_index);
+                                            has_selection = 1;
+                                        }
+                                    }
+                                    
+                                    heidic_imgui_pop_id();
+                                    global_cube_display_index = global_cube_display_index + 1;
+                                }
+                            }
+                            cube_index = cube_index + 1;
+                        }
+                    } else {
+                        // Even if collapsed, we need to count the cubes for global numbering
+                        let cube_index: i32 = 0;
+                        while cube_index < total_cube_count {
+                            if heidic_get_cube_active(cube_index) == 1 {
+                                if heidic_get_cube_combination_id(cube_index) == combo_id {
+                                    global_cube_display_index = global_cube_display_index + 1;
+                                }
+                            }
+                            cube_index = cube_index + 1;
+                        }
+                    }
+                    
+                    // Pop combination ID
+                    heidic_imgui_pop_id();
+                    combo_id = combo_id + 1;
+                }
+                
+                // Then, show uncombined cubes (cubes with combination_id == -1)
+                let cube_index: i32 = 0;
+                
+                while cube_index < total_cube_count {
+                    if heidic_get_cube_active(cube_index) == 1 {
+                        if heidic_get_cube_combination_id(cube_index) == -1 {
+                            // Push unique ID for this cube
+                            heidic_imgui_push_id(cube_index);
+                            
+                            // This cube is not in any combination
+                            let cube_name: string = heidic_format_cube_name_with_index(global_cube_display_index);
+                            
+                            // Make cube name clickable to select it
+                            if heidic_is_cube_selected(cube_index) == 1 {
+                                // Selected: show in bold (yellow)
+                                heidic_imgui_text_bold(cube_name);
+                            } else {
+                                // Not selected: make clickable
+                                if heidic_imgui_selectable_str(cube_name) == 1 {
+                                    // Clicked: select this cube (clear others first if not Ctrl+Click)
+                                    heidic_clear_selection();
+                                    heidic_add_to_selection(cube_index);
+                                    
+                                    // Update single selection state for gizmo
+                                    let cube_index_f: f32 = heidic_int_to_float(cube_index);
+                                    selected_cube_index = cube_index_f + 2.0;
+                                    selected_cube_x = heidic_get_cube_x(cube_index);
+                                    selected_cube_y = heidic_get_cube_y(cube_index);
+                                    selected_cube_z = heidic_get_cube_z(cube_index);
+                                    selected_cube_sx = heidic_get_cube_sx(cube_index);
+                                    selected_cube_sy = heidic_get_cube_sy(cube_index);
+                                    selected_cube_sz = heidic_get_cube_sz(cube_index);
+                                    has_selection = 1;
+                                }
+                            }
+                            
+                            heidic_imgui_pop_id();
+                            global_cube_display_index = global_cube_display_index + 1;
+                        }
+                    }
+                    cube_index = cube_index + 1;
+                }
+                
+                heidic_imgui_end();
+            }
             
-            heidic_imgui_text("=== CREATED CUBES ===");
-            let active_cube_count: i32 = heidic_get_cube_count();
-            let total_cube_count: i32 = heidic_get_cube_total_count();
-            heidic_imgui_text_float("Active Cubes", heidic_int_to_float(active_cube_count));
-            heidic_imgui_text_float("Total Cubes", heidic_int_to_float(total_cube_count));
-            heidic_imgui_end();
+            // Texture Swatches Window
+            if heidic_imgui_begin("Texture Swatches") == 1 {
+                // Load texture list on first frame
+                heidic_load_texture_list();
+                
+                let texture_count: i32 = heidic_get_texture_count();
+                let selected_texture: string = heidic_get_selected_texture();
+                
+                // Display textures in a grid as image previews
+                let texture_index: i32 = 0;
+                let items_per_row: i32 = 6;  // 6 textures per row
+                let current_col: i32 = 0;
+                let swatch_size: f32 = 64.0;  // 64x64 pixel previews
+                
+                while texture_index < texture_count {
+                    let texture_name: string = heidic_get_texture_name(texture_index);
+                    
+                    // Load texture preview and get ID
+                    let texture_id: i64 = heidic_get_texture_preview_id(texture_name);
+                    
+                    // Create unique ID for button
+                    heidic_imgui_push_id(texture_index);
+                    
+                    // Check if this texture is selected
+                    let is_selected: i32 = 0;
+                    if selected_texture == texture_name {
+                        is_selected = 1;
+                    }
+                    
+                    // Display as image button
+                    if texture_id != 0 {
+                        // Use tint color to indicate selection (yellow tint if selected)
+                        let tint_r: f32 = 1.0;
+                        let tint_g: f32 = 1.0;
+                        let tint_b: f32 = 1.0;
+                        let tint_a: f32 = 1.0;
+                        if is_selected == 1 {
+                            tint_r = 1.0;
+                            tint_g = 1.0;
+                            tint_b = 0.5;  // Yellow tint for selected
+                        }
+                        
+                        // Create button ID
+                        let button_id: string = "##tex_btn_";
+                        // Use ImageButton with tint
+                        if heidic_imgui_image_button(button_id, texture_id, swatch_size, swatch_size, tint_r, tint_g, tint_b, tint_a) == 1 {
+                            // Clicked: select this texture
+                            heidic_set_selected_texture(texture_name);
+                        }
+                    } else {
+                        // Fallback to text if texture failed to load
+                        heidic_imgui_text_str_wrapper(texture_name);
+                    }
+                    
+                    heidic_imgui_pop_id();
+                    
+                    // Same line for grid layout
+                    current_col = current_col + 1;
+                    if current_col < items_per_row {
+                        heidic_imgui_same_line();
+                    } else {
+                        current_col = 0;
+                    }
+                    
+                    texture_index = texture_index + 1;
+                }
+                
+                heidic_imgui_end();
+            }
         }
         
         // Player cube is not selectable, so no position syncing needed
@@ -1505,93 +1778,7 @@ fn main(): void {
             heidic_draw_line(player_pos.x, player_pos.y, player_pos.z, ground_check_end.x, ground_check_end.y, ground_check_end.z, 1.0, 0.0, 0.0);
         }
         
-        // ImGui
-        if show_debug == 1 {
-            heidic_imgui_begin("Debug Panel (F1 to Toggle)");
-            
-            // Display FPS
-            let fps: f32 = heidic_get_fps();
-            heidic_imgui_text_float("FPS", fps);
-            
-            heidic_imgui_text("Camera Mode (C to Toggle): ");
-            if camera_mode == 0 {
-                heidic_imgui_text("Top-Down");
-            } else {
-                heidic_imgui_text("FPS");
-            }
-            
-            heidic_imgui_text("Camera Transform (1 unit = 1 cm)");
-            camera_pos.x = heidic_imgui_drag_float("Cam X", camera_pos.x, 1.0);
-            camera_pos.y = heidic_imgui_drag_float("Cam Y", camera_pos.y, 1.0);
-            camera_pos.z = heidic_imgui_drag_float("Cam Z", camera_pos.z, 1.0);
-            camera_rot.x = heidic_imgui_drag_float("Cam Rot X", camera_rot.x, 1.0);
-            camera_rot.y = heidic_imgui_drag_float("Cam Rot Y", camera_rot.y, 1.0);
-            camera_rot.z = heidic_imgui_drag_float("Cam Rot Z", camera_rot.z, 1.0);
-            
-            heidic_imgui_text("Player Transform");
-            player_pos.x = heidic_imgui_drag_float("Player X", player_pos.x, 1.0);
-            player_pos.y = heidic_imgui_drag_float("Player Y", player_pos.y, 1.0);
-            player_pos.z = heidic_imgui_drag_float("Player Z", player_pos.z, 1.0);
-            player_rot.x = heidic_imgui_drag_float("Player Rot X", player_rot.x, 1.0);
-            player_rot.y = heidic_imgui_drag_float("Player Rot Y", player_rot.y, 1.0);
-            player_rot.z = heidic_imgui_drag_float("Player Rot Z", player_rot.z, 1.0);
-            
-            cube_sx = heidic_imgui_drag_float("Cube Scale X", cube_sx, 1.0);
-            cube_sy = heidic_imgui_drag_float("Cube Scale Y", cube_sy, 1.0);
-            cube_sz = heidic_imgui_drag_float("Cube Scale Z", cube_sz, 1.0);
-            
-            // Display direction vectors
-            heidic_imgui_text("Direction Vectors (W moves in Forward direction)");
-            let debug_rot_y_rad: f32 = heidic_convert_degrees_to_radians(player_rot.y);
-            let debug_forward_x: f32 = -heidic_sin(debug_rot_y_rad);
-            let debug_forward_z: f32 = -heidic_cos(debug_rot_y_rad);
-            let debug_right_x: f32 = heidic_cos(debug_rot_y_rad);
-            let debug_right_z: f32 = -heidic_sin(debug_rot_y_rad);
-            heidic_imgui_text_float("Forward X", debug_forward_x);
-            heidic_imgui_text_float("Forward Z", debug_forward_z);
-            heidic_imgui_text_float("Right X", debug_right_x);
-            heidic_imgui_text_float("Right Z", debug_right_z);
-            
-            // Raycasting Info
-            heidic_imgui_text("=== Raycasting ===");
-            heidic_imgui_text("Mouse Screen Coords:");
-            heidic_imgui_text_float("  Mouse X (screen)", mouse_x);
-            heidic_imgui_text_float("  Mouse Y (screen)", mouse_y);
-            
-            heidic_imgui_text("Ray Origin (world):");
-            heidic_imgui_text_float("  Ray Origin X", ray_origin.x);
-            heidic_imgui_text_float("  Ray Origin Y", ray_origin.y);
-            heidic_imgui_text_float("  Ray Origin Z", ray_origin.z);
-            
-            heidic_imgui_text("Ray Direction (normalized):");
-            heidic_imgui_text_float("  Ray Dir X", ray_dir.x);
-            heidic_imgui_text_float("  Ray Dir Y", ray_dir.y);
-            heidic_imgui_text_float("  Ray Dir Z", ray_dir.z);
-
-            heidic_imgui_text("Camera to Origin Dist:");
-            let dist_camera_to_origin: f32 = (ray_origin.x - camera_pos.x) * (ray_origin.x - camera_pos.x) + (ray_origin.y - camera_pos.y) * (ray_origin.y - camera_pos.y) + (ray_origin.z - camera_pos.z) * (ray_origin.z - camera_pos.z);
-            heidic_imgui_text_float("  Distance", dist_camera_to_origin);
-            
-            heidic_imgui_text("Selection:");
-            if has_selection == 1 {
-                heidic_imgui_text("  Selected Cube");
-                heidic_imgui_text_float("  Index", selected_cube_index);
-                heidic_imgui_text_float("  X", selected_cube_x);
-                heidic_imgui_text_float("  Y", selected_cube_y);
-                heidic_imgui_text_float("  Z", selected_cube_z);
-            } else {
-                heidic_imgui_text("  No Selection (Click to select)");
-            }
-            
-            heidic_imgui_text("Ground Detection:");
-            if is_grounded == 1 {
-                heidic_imgui_text("  GROUNDED");
-            } else {
-                heidic_imgui_text("  IN AIR");
-            }
-            
-            heidic_imgui_end();
-        }
+        // Debug Panel and Outliner removed - will be reimplemented from scratch
         
         heidic_end_frame();
     }
