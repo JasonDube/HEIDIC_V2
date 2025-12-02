@@ -98,7 +98,14 @@ fn main(): void {
     let selected_cube_sy: f32 = 0.0;
     let selected_cube_sz: f32 = 0.0;
     let has_selection: i32 = 0; // 0 = no selection, 1 = has selection
-    let selected_cube_index: f32 = -1.0; // -1.0 = none, 0.0 = player, >= 2.0 = created cubes
+    let selected_cube_index: f32 = -1.0; // -1.0 = none, 0.0 = player, >= 2.0 = created cubes, >= 10000.0 = mesh instances
+    
+    // Mesh selection state
+    let selected_mesh_instance_id: i32 = -1; // -1 = none, >= 0 = mesh instance ID
+    let selected_mesh_x: f32 = 0.0;
+    let selected_mesh_y: f32 = 0.0;
+    let selected_mesh_z: f32 = 0.0;
+    let has_mesh_selection: i32 = 0; // 0 = no mesh selection, 1 = has mesh selection
     
     // Ground detection
     let is_grounded: i32 = 0;
@@ -684,9 +691,31 @@ fn main(): void {
                 
                 space_was_pressed = 1;
             }
-        } else {
-            space_was_pressed = 0;
-        }
+            } else {
+                space_was_pressed = 0;
+            }
+            
+            // Ctrl+M (77 is 'M') - Combine selected cubes into mesh and save as .hdm
+            let m_is_pressed: i32 = heidic_is_key_pressed(window, 77);
+            let ctrl_is_down: i32 = heidic_ctrl_down(window);
+            if m_is_pressed == 1 && ctrl_is_down == 1 {
+                let selected_count: i32 = heidic_get_selection_count();
+                if selected_count > 0 {
+                    // Save to meshes directory (create if doesn't exist)
+                    // For now, save to "meshes/combined_mesh.hdm" in current directory
+                    let mesh_filepath: string = "meshes/combined_mesh.hdm";
+                    let result: i32 = heidic_combine_selected_cubes_to_mesh(mesh_filepath);
+                    if result == 1 {
+                        print("Successfully combined selected cubes into mesh: ");
+                        print(mesh_filepath);
+                        print("\n");
+                        // Optionally clear selection after combining
+                        // heidic_clear_selection();
+                    } else {
+                        print("Failed to combine cubes into mesh\n");
+                    }
+                }
+            }
         
         // C key (67) - Combine selected cubes
         let c_is_pressed: i32 = heidic_is_key_pressed(window, 67);
@@ -975,6 +1004,16 @@ fn main(): void {
                     selected_cube_sy = default_cube_size;
                     selected_cube_sz = default_cube_size;
                 }
+                if heidic_imgui_menu_item("Load Mesh") == 1 {
+                    let mesh_id: i32 = heidic_show_open_mesh_dialog();
+                    if mesh_id >= 0 {
+                        print("Successfully loaded mesh with ID: ");
+                        print(mesh_id);
+                        print("\n");
+                    } else {
+                        print("Failed to load mesh or user cancelled\n");
+                    }
+                }
                 heidic_imgui_end_menu();
             }
             heidic_imgui_end_main_menu_bar();
@@ -1075,6 +1114,77 @@ fn main(): void {
         
         // Flush any remaining batched cubes at the end (draw final texture group)
         heidic_flush_colored_cubes();
+        
+        // Draw all loaded mesh instances (from .hdm files)
+        let mesh_instance_count: i32 = heidic_get_mesh_instance_total_count();
+        if mesh_instance_count > 0 {
+            // Ensure default texture is loaded after drawing cubes (in case mesh has no texture)
+            heidic_load_texture_for_rendering("default.bmp");
+            
+            let mesh_instance_index: i32 = 0;
+            while mesh_instance_index < mesh_instance_count {
+                if heidic_get_mesh_instance_active(mesh_instance_index) == 1 {
+                    // Get mesh instance data
+                    let instance_mesh_id: i32 = heidic_get_mesh_instance_mesh_id(mesh_instance_index);
+                    let instance_x: f32 = heidic_get_mesh_instance_x(mesh_instance_index);
+                    let instance_y: f32 = heidic_get_mesh_instance_y(mesh_instance_index);
+                    let instance_z: f32 = heidic_get_mesh_instance_z(mesh_instance_index);
+                    
+                    // Get mesh center, scale, and rotation
+                    let mesh_center_x: f32 = heidic_get_mesh_instance_center_x(mesh_instance_index);
+                    let mesh_center_y: f32 = heidic_get_mesh_instance_center_y(mesh_instance_index);
+                    let mesh_center_z: f32 = heidic_get_mesh_instance_center_z(mesh_instance_index);
+                    let mesh_sx: f32 = heidic_get_mesh_instance_sx(mesh_instance_index);
+                    let mesh_sy: f32 = heidic_get_mesh_instance_sy(mesh_instance_index);
+                    let mesh_sz: f32 = heidic_get_mesh_instance_sz(mesh_instance_index);
+                    let mesh_rx: f32 = heidic_get_mesh_instance_rx(mesh_instance_index);
+                    let mesh_ry: f32 = heidic_get_mesh_instance_ry(mesh_instance_index);
+                    let mesh_rz: f32 = heidic_get_mesh_instance_rz(mesh_instance_index);
+                    
+                    // Calculate actual world position (instance offset + original center)
+                    let world_x: f32 = instance_x + mesh_center_x;
+                    let world_y: f32 = instance_y + mesh_center_y;
+                    let world_z: f32 = instance_z + mesh_center_z;
+                    
+                    // Draw mesh at world position with scale and rotation
+                    // Note: Mesh vertices are in world space, so we need to scale around the mesh center
+                    // to prevent translation when scaling
+                    heidic_draw_mesh_scaled_with_center(instance_mesh_id, instance_x, instance_y, instance_z, mesh_rx, mesh_ry, mesh_rz, mesh_sx, mesh_sy, mesh_sz, mesh_center_x, mesh_center_y, mesh_center_z);
+                    
+                    // Draw wireframe bounding box for selected meshes
+                    if heidic_is_mesh_selected(mesh_instance_index) == 1 {
+                        // Get bounding box (relative to mesh center)
+                        let bbox_min_x: f32 = heidic_get_mesh_instance_bbox_min_x(mesh_instance_index);
+                        let bbox_min_y: f32 = heidic_get_mesh_instance_bbox_min_y(mesh_instance_index);
+                        let bbox_min_z: f32 = heidic_get_mesh_instance_bbox_min_z(mesh_instance_index);
+                        let bbox_max_x: f32 = heidic_get_mesh_instance_bbox_max_x(mesh_instance_index);
+                        let bbox_max_y: f32 = heidic_get_mesh_instance_bbox_max_y(mesh_instance_index);
+                        let bbox_max_z: f32 = heidic_get_mesh_instance_bbox_max_z(mesh_instance_index);
+                        
+                        // Scale bounding box by current scale
+                        let scaled_min_x: f32 = bbox_min_x * mesh_sx;
+                        let scaled_min_y: f32 = bbox_min_y * mesh_sy;
+                        let scaled_min_z: f32 = bbox_min_z * mesh_sz;
+                        let scaled_max_x: f32 = bbox_max_x * mesh_sx;
+                        let scaled_max_y: f32 = bbox_max_y * mesh_sy;
+                        let scaled_max_z: f32 = bbox_max_z * mesh_sz;
+                        
+                        // Calculate bounding box center and size (in world space)
+                        let bbox_center_x: f32 = world_x;
+                        let bbox_center_y: f32 = world_y;
+                        let bbox_center_z: f32 = world_z;
+                        let bbox_size_x: f32 = scaled_max_x - scaled_min_x;
+                        let bbox_size_y: f32 = scaled_max_y - scaled_min_y;
+                        let bbox_size_z: f32 = scaled_max_z - scaled_min_z;
+                        
+                        // Draw wireframe bounding box (yellow) - this matches where the corner cubes will be
+                        heidic_draw_cube_wireframe(bbox_center_x, bbox_center_y, bbox_center_z, 0.0, 0.0, 0.0, 
+                                                    bbox_size_x, bbox_size_y, bbox_size_z, 1.0, 1.0, 0.0);
+                    }
+                }
+                mesh_instance_index = mesh_instance_index + 1;
+            }
+        }
         
         // ============================================================================
         // RAYCASTING
@@ -1441,6 +1551,49 @@ fn main(): void {
         //    }
         // }
         
+        // Check gizmo interaction FIRST (before selection processing)
+        // This prevents deselection when clicking on gizmos
+        let gizmo_clicked: i32 = 0;
+        if mouse_mode == 1 && mouse_left_pressed == 1 && alt_pressed == 0 && has_mesh_selection == 1 && selected_mesh_instance_id >= 0 {
+            // A mesh is selected - check if gizmo would be clicked
+            let mesh_center_x: f32 = heidic_get_mesh_instance_center_x(selected_mesh_instance_id);
+            let mesh_center_y: f32 = heidic_get_mesh_instance_center_y(selected_mesh_instance_id);
+            let mesh_center_z: f32 = heidic_get_mesh_instance_center_z(selected_mesh_instance_id);
+            let gizmo_x: f32 = selected_mesh_x + mesh_center_x;
+            let gizmo_y: f32 = selected_mesh_y + mesh_center_y;
+            let gizmo_z: f32 = selected_mesh_z + mesh_center_z;
+            let current_scale: f32 = heidic_get_mesh_instance_sx(selected_mesh_instance_id);
+            
+            // Check if translation gizmo would be clicked (by calling it, but we'll check interaction state)
+            // We need to call it to update its internal state, but we'll check if it becomes active
+            let temp_pos: Vec3 = heidic_gizmo_translate(window, gizmo_x, gizmo_y, gizmo_z);
+            let translate_interacting: i32 = heidic_gizmo_is_interacting();
+            
+            // Check if scale gizmo would be clicked
+            let bbox_min_x: f32 = heidic_get_mesh_instance_bbox_min_x(selected_mesh_instance_id);
+            let bbox_min_y: f32 = heidic_get_mesh_instance_bbox_min_y(selected_mesh_instance_id);
+            let bbox_min_z: f32 = heidic_get_mesh_instance_bbox_min_z(selected_mesh_instance_id);
+            let bbox_max_x: f32 = heidic_get_mesh_instance_bbox_max_x(selected_mesh_instance_id);
+            let bbox_max_y: f32 = heidic_get_mesh_instance_bbox_max_y(selected_mesh_instance_id);
+            let bbox_max_z: f32 = heidic_get_mesh_instance_bbox_max_z(selected_mesh_instance_id);
+            let temp_scale: f32 = heidic_gizmo_scale(window, gizmo_x, gizmo_y, gizmo_z,
+                                                     bbox_min_x, bbox_min_y, bbox_min_z,
+                                                     bbox_max_x, bbox_max_y, bbox_max_z,
+                                                     current_scale);
+            let scale_interacting: i32 = heidic_gizmo_scale_is_interacting();
+            
+            // Check if rotation gizmo would be clicked
+            let current_rx: f32 = heidic_get_mesh_instance_rx(selected_mesh_instance_id);
+            let current_ry: f32 = heidic_get_mesh_instance_ry(selected_mesh_instance_id);
+            let current_rz: f32 = heidic_get_mesh_instance_rz(selected_mesh_instance_id);
+            let temp_rot: Vec3 = heidic_gizmo_rotate(window, gizmo_x, gizmo_y, gizmo_z, current_rx, current_ry, current_rz);
+            let rotate_interacting: i32 = heidic_gizmo_rotate_is_interacting();
+            
+            if translate_interacting == 1 || scale_interacting == 1 || rotate_interacting == 1 {
+                gizmo_clicked = 1;
+            }
+        }
+        
         // Selection: Click to select cubes - test ALL cubes
         // Only allow selection when mouse_mode is enabled AND Alt is NOT pressed (Alt+Click is for orbit, not selection)
         if mouse_mode == 1 && mouse_left_pressed == 1 && alt_pressed == 0 {
@@ -1455,12 +1608,15 @@ fn main(): void {
             // Only check gizmo interaction if we're NOT doing a fresh click
             // This allows selection even if gizmo axes are being hovered
             let interacting: i32 = 0;
+            let scale_interacting: i32 = 0;
             if mouse_left_was_pressed == 1 {
                 // Already was pressed - check if gizmo is actively being dragged
                 interacting = heidic_gizmo_is_interacting();
+                scale_interacting = heidic_gizmo_scale_is_interacting();
             }
             
-            if interacting == 0 {
+            // Skip selection processing if gizmo was clicked
+            if gizmo_clicked == 0 && (interacting == 0 && scale_interacting == 0) {
                 if mouse_left_was_pressed == 0 {
                     // Just clicked - test raycast against all cubes and find closest hit
                     // Initialize closest_dist to a very large number (squared distance)
@@ -1532,11 +1688,17 @@ fn main(): void {
                         dolly_orbit_azimuth = 0.0;
                         dolly_orbit_elevation = 45.0;
                     } else {
-                        // Clicked on nothing - clear selection if not Ctrl+Click
-                        if ctrl_pressed == 0 {
+                        // Clicked on nothing - clear selection if not Ctrl+Click, not clicking on gizmo, and not clicking on ImGui
+                        let imgui_wants_mouse: i32 = heidic_imgui_wants_mouse();
+                        if ctrl_pressed == 0 && gizmo_clicked == 0 && imgui_wants_mouse == 0 {
                             heidic_clear_selection();
                             has_selection = 0;
                             selected_cube_index = -1.0;
+                            
+                            // Also clear mesh selection (only if not clicking on gizmo or ImGui)
+                            heidic_clear_mesh_selection();
+                            has_mesh_selection = 0;
+                            selected_mesh_instance_id = -1;
                         }
                     }
                     
@@ -1569,6 +1731,83 @@ fn main(): void {
             if selected_cube_index >= 2.0 {
                 let cube_storage_index: f32 = selected_cube_index - 2.0;
                 heidic_set_cube_pos_f(cube_storage_index, selected_cube_x, selected_cube_y, selected_cube_z);
+            }
+        }
+        
+        // Show mesh selection and Gizmo
+        if has_mesh_selection == 1 && selected_mesh_instance_id >= 0 {
+            // Get mesh center and bounding box for gizmo positioning
+            let mesh_center_x: f32 = heidic_get_mesh_instance_center_x(selected_mesh_instance_id);
+            let mesh_center_y: f32 = heidic_get_mesh_instance_center_y(selected_mesh_instance_id);
+            let mesh_center_z: f32 = heidic_get_mesh_instance_center_z(selected_mesh_instance_id);
+            
+            // Get current scale
+            let current_scale: f32 = heidic_get_mesh_instance_sx(selected_mesh_instance_id);
+            
+            // Calculate world position of mesh center (instance offset + original center)
+            let gizmo_x: f32 = selected_mesh_x + mesh_center_x;
+            let gizmo_y: f32 = selected_mesh_y + mesh_center_y;
+            let gizmo_z: f32 = selected_mesh_z + mesh_center_z;
+            
+            // Check if scale gizmo is being used (prevents translation when scaling)
+            let scale_interacting: i32 = heidic_gizmo_scale_is_interacting();
+            let translate_interacting: i32 = heidic_gizmo_is_interacting();
+            
+            // Scale gizmo: Scale selected mesh (using bounding box corners)
+            // Get bounding box from instance (relative to mesh center)
+            let bbox_min_x: f32 = heidic_get_mesh_instance_bbox_min_x(selected_mesh_instance_id);
+            let bbox_min_y: f32 = heidic_get_mesh_instance_bbox_min_y(selected_mesh_instance_id);
+            let bbox_min_z: f32 = heidic_get_mesh_instance_bbox_min_z(selected_mesh_instance_id);
+            let bbox_max_x: f32 = heidic_get_mesh_instance_bbox_max_x(selected_mesh_instance_id);
+            let bbox_max_y: f32 = heidic_get_mesh_instance_bbox_max_y(selected_mesh_instance_id);
+            let bbox_max_z: f32 = heidic_get_mesh_instance_bbox_max_z(selected_mesh_instance_id);
+            
+            let new_scale: f32 = heidic_gizmo_scale(window, gizmo_x, gizmo_y, gizmo_z,
+                                                     bbox_min_x, bbox_min_y, bbox_min_z,
+                                                     bbox_max_x, bbox_max_y, bbox_max_z,
+                                                     current_scale);
+            
+            // Update scale if it changed
+            if new_scale != current_scale {
+                heidic_set_mesh_instance_scale(selected_mesh_instance_id, new_scale, new_scale, new_scale);
+            }
+            
+            // Get current rotation
+            let current_rx: f32 = heidic_get_mesh_instance_rx(selected_mesh_instance_id);
+            let current_ry: f32 = heidic_get_mesh_instance_ry(selected_mesh_instance_id);
+            let current_rz: f32 = heidic_get_mesh_instance_rz(selected_mesh_instance_id);
+            
+            // Check if rotation gizmo is being used
+            let rotate_interacting: i32 = heidic_gizmo_rotate_is_interacting();
+            
+            // Rotation gizmo: Rotate selected mesh
+            let new_rotation: Vec3 = heidic_gizmo_rotate(window, gizmo_x, gizmo_y, gizmo_z, current_rx, current_ry, current_rz);
+            
+            // Update rotation if it changed
+            if new_rotation.x != current_rx || new_rotation.y != current_ry || new_rotation.z != current_rz {
+                heidic_set_mesh_instance_rotation(selected_mesh_instance_id, new_rotation.x, new_rotation.y, new_rotation.z);
+            }
+            
+            // Translation gizmo: Only update if scale and rotation gizmos are not active
+            if scale_interacting == 0 && rotate_interacting == 0 {
+                // Translation gizmo: Move selected mesh (positioned at mesh center)
+                let new_gizmo_pos: Vec3 = heidic_gizmo_translate(window, gizmo_x, gizmo_y, gizmo_z);
+                
+                // Only update position if translation gizmo is actually being dragged
+                if translate_interacting == 1 {
+                    // Calculate new instance offset (gizmo position - mesh center)
+                    let new_instance_x: f32 = new_gizmo_pos.x - mesh_center_x;
+                    let new_instance_y: f32 = new_gizmo_pos.y - mesh_center_y;
+                    let new_instance_z: f32 = new_gizmo_pos.z - mesh_center_z;
+                    
+                    // Update selected mesh position
+                    selected_mesh_x = new_instance_x;
+                    selected_mesh_y = new_instance_y;
+                    selected_mesh_z = new_instance_z;
+                    
+                    // Update mesh instance position
+                    heidic_set_mesh_instance_pos(selected_mesh_instance_id, selected_mesh_x, selected_mesh_y, selected_mesh_z);
+                }
             }
         }
         
@@ -1719,7 +1958,123 @@ fn main(): void {
                     cube_index = cube_index + 1;
                 }
                 
+                // Show mesh instances in outliner
+                let mesh_instance_count: i32 = heidic_get_mesh_instance_total_count();
+                if mesh_instance_count > 0 {
+                    heidic_imgui_separator();
+                    heidic_imgui_text("Meshes:");
+                    
+                    let mesh_instance_index: i32 = 0;
+                    while mesh_instance_index < mesh_instance_count {
+                        if heidic_get_mesh_instance_active(mesh_instance_index) == 1 {
+                            heidic_imgui_push_id(mesh_instance_index + 10000);  // Offset to avoid conflicts
+                            
+                            let mesh_name: string = heidic_format_mesh_name(mesh_instance_index);
+                            
+                            // Make mesh name clickable to toggle selection
+                            let is_mesh_selected: i32 = heidic_is_mesh_selected(mesh_instance_index);
+                            
+                            // Always use selectable so it's clickable whether selected or not
+                            // Selectable will show visual feedback (highlighted when selected)
+                            if heidic_imgui_selectable_str(mesh_name) == 1 {
+                                if is_mesh_selected == 1 {
+                                    // Already selected: clicking again deselects it
+                                    heidic_clear_mesh_selection();
+                                    has_mesh_selection = 0;
+                                    selected_mesh_instance_id = -1;
+                                } else {
+                                    // Not selected: clicking selects it
+                                    heidic_clear_selection();
+                                    heidic_clear_mesh_selection();
+                                    heidic_add_mesh_to_selection(mesh_instance_index);
+                                    
+                                    // Update mesh selection state for gizmo
+                                    selected_mesh_instance_id = mesh_instance_index;
+                                    selected_mesh_x = heidic_get_mesh_instance_x(mesh_instance_index);
+                                    selected_mesh_y = heidic_get_mesh_instance_y(mesh_instance_index);
+                                    selected_mesh_z = heidic_get_mesh_instance_z(mesh_instance_index);
+                                    has_mesh_selection = 1;
+                                    has_selection = 0;  // Clear cube selection
+                                    selected_cube_index = -1.0;
+                                }
+                            }
+                            
+                            heidic_imgui_pop_id();
+                        }
+                        mesh_instance_index = mesh_instance_index + 1;
+                    }
+                }
+                
                 heidic_imgui_end();
+            }
+            
+            // Rotation Control Window
+            if has_mesh_selection == 1 && selected_mesh_instance_id >= 0 {
+                if heidic_imgui_begin("Rotation Control") == 1 {
+                    // Get current rotation
+                    let current_rx: f32 = heidic_get_mesh_instance_rx(selected_mesh_instance_id);
+                    let current_ry: f32 = heidic_get_mesh_instance_ry(selected_mesh_instance_id);
+                    let current_rz: f32 = heidic_get_mesh_instance_rz(selected_mesh_instance_id);
+                    
+                    // X Rotation - Slider and Input (both work independently)
+                    let new_rx_slider: f32 = heidic_imgui_slider_float("Rotation X", current_rx, 0.0, 360.0);
+                    let new_rx_input: f32 = heidic_imgui_input_float("##RX", current_rx, 1.0, 10.0);
+                    // Use input value if it changed, otherwise use slider value
+                    let new_rx: f32 = new_rx_slider;
+                    if new_rx_input != current_rx {
+                        new_rx = new_rx_input;
+                    }
+                    if new_rx != current_rx {
+                        // Clamp to 0-360 range
+                        if new_rx < 0.0 {
+                            new_rx = 0.0;
+                        }
+                        if new_rx > 360.0 {
+                            new_rx = 360.0;
+                        }
+                        heidic_set_mesh_instance_rotation(selected_mesh_instance_id, new_rx, current_ry, current_rz);
+                    }
+                    
+                    // Y Rotation - Slider and Input (both work independently)
+                    let new_ry_slider: f32 = heidic_imgui_slider_float("Rotation Y", current_ry, 0.0, 360.0);
+                    let new_ry_input: f32 = heidic_imgui_input_float("##RY", current_ry, 1.0, 10.0);
+                    // Use input value if it changed, otherwise use slider value
+                    let new_ry: f32 = new_ry_slider;
+                    if new_ry_input != current_ry {
+                        new_ry = new_ry_input;
+                    }
+                    if new_ry != current_ry {
+                        // Clamp to 0-360 range
+                        if new_ry < 0.0 {
+                            new_ry = 0.0;
+                        }
+                        if new_ry > 360.0 {
+                            new_ry = 360.0;
+                        }
+                        heidic_set_mesh_instance_rotation(selected_mesh_instance_id, current_rx, new_ry, current_rz);
+                    }
+                    
+                    // Z Rotation - Slider and Input (both work independently)
+                    let new_rz_slider: f32 = heidic_imgui_slider_float("Rotation Z", current_rz, 0.0, 360.0);
+                    let new_rz_input: f32 = heidic_imgui_input_float("##RZ", current_rz, 1.0, 10.0);
+                    // Use input value if it changed, otherwise use slider value
+                    let new_rz: f32 = new_rz_slider;
+                    if new_rz_input != current_rz {
+                        new_rz = new_rz_input;
+                    }
+                    if new_rz != current_rz {
+                        // Clamp to 0-360 range
+                        if new_rz < 0.0 {
+                            new_rz = 0.0;
+                        }
+                        if new_rz > 360.0 {
+                            new_rz = 360.0;
+                        }
+                        heidic_set_mesh_instance_rotation(selected_mesh_instance_id, current_rx, current_ry, new_rz);
+                    }
+                    
+                    heidic_imgui_end();
+                }
             }
             
             // Texture Swatches Window

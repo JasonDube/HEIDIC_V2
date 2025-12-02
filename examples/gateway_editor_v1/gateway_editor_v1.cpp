@@ -106,6 +106,9 @@ extern "C" {
     int32_t heidic_is_key_pressed(GLFWwindow* window, int32_t key);
 }
 extern "C" {
+    int32_t heidic_ctrl_down(GLFWwindow* window);
+}
+extern "C" {
     int32_t heidic_is_mouse_button_pressed(GLFWwindow* window, int32_t button);
 }
 extern "C" {
@@ -157,7 +160,121 @@ extern "C" {
     int32_t heidic_load_ascii_model(const char* filename);
 }
 extern "C" {
+    int32_t heidic_load_hdm_mesh(const char* filepath);
+}
+extern "C" {
+    int32_t heidic_get_mesh_count();
+}
+extern "C" {
+    int32_t heidic_get_mesh_id(int32_t index);
+}
+extern "C" {
     void heidic_draw_mesh(int32_t mesh_id, float x, float y, float z, float rx, float ry, float rz);
+}
+extern "C" {
+    void heidic_draw_mesh_scaled(int32_t mesh_id, float x, float y, float z, float rx, float ry, float rz, float sx, float sy, float sz);
+}
+extern "C" {
+    void heidic_draw_mesh_scaled_with_center(int32_t mesh_id, float x, float y, float z, float rx, float ry, float rz, float sx, float sy, float sz, float center_x, float center_y, float center_z);
+}
+extern "C" {
+    int32_t heidic_get_mesh_instance_count();
+}
+extern "C" {
+    int32_t heidic_get_mesh_instance_total_count();
+}
+extern "C" {
+    int32_t heidic_get_mesh_instance_mesh_id(int32_t instance_id);
+}
+extern "C" {
+    float heidic_get_mesh_instance_x(int32_t instance_id);
+}
+extern "C" {
+    float heidic_get_mesh_instance_y(int32_t instance_id);
+}
+extern "C" {
+    float heidic_get_mesh_instance_z(int32_t instance_id);
+}
+extern "C" {
+    float heidic_get_mesh_instance_center_x(int32_t instance_id);
+}
+extern "C" {
+    float heidic_get_mesh_instance_center_y(int32_t instance_id);
+}
+extern "C" {
+    float heidic_get_mesh_instance_center_z(int32_t instance_id);
+}
+extern "C" {
+    float heidic_get_mesh_instance_bbox_min_x(int32_t instance_id);
+}
+extern "C" {
+    float heidic_get_mesh_instance_bbox_min_y(int32_t instance_id);
+}
+extern "C" {
+    float heidic_get_mesh_instance_bbox_min_z(int32_t instance_id);
+}
+extern "C" {
+    float heidic_get_mesh_instance_bbox_max_x(int32_t instance_id);
+}
+extern "C" {
+    float heidic_get_mesh_instance_bbox_max_y(int32_t instance_id);
+}
+extern "C" {
+    float heidic_get_mesh_instance_bbox_max_z(int32_t instance_id);
+}
+extern "C" {
+    float heidic_get_mesh_instance_sx(int32_t instance_id);
+}
+extern "C" {
+    float heidic_get_mesh_instance_sy(int32_t instance_id);
+}
+extern "C" {
+    float heidic_get_mesh_instance_sz(int32_t instance_id);
+}
+extern "C" {
+    float heidic_get_mesh_instance_rx(int32_t instance_id);
+}
+extern "C" {
+    float heidic_get_mesh_instance_ry(int32_t instance_id);
+}
+extern "C" {
+    float heidic_get_mesh_instance_rz(int32_t instance_id);
+}
+extern "C" {
+    void heidic_set_mesh_instance_pos(int32_t instance_id, float x, float y, float z);
+}
+extern "C" {
+    void heidic_set_mesh_instance_scale(int32_t instance_id, float sx, float sy, float sz);
+}
+extern "C" {
+    void heidic_set_mesh_instance_rotation(int32_t instance_id, float rx, float ry, float rz);
+}
+extern "C" {
+    const char* heidic_get_mesh_instance_name(int32_t instance_id);
+}
+extern "C" {
+    int32_t heidic_get_mesh_instance_active(int32_t instance_id);
+}
+extern "C" {
+    void heidic_clear_mesh_selection();
+}
+extern "C" {
+    void heidic_add_mesh_to_selection(int32_t instance_id);
+}
+extern "C" {
+    void heidic_remove_mesh_from_selection(int32_t instance_id);
+}
+extern "C" {
+    void heidic_toggle_mesh_selection(int32_t instance_id);
+}
+extern "C" {
+    int32_t heidic_is_mesh_selected(int32_t instance_id);
+}
+extern "C" {
+    int32_t heidic_get_mesh_selection_count();
+}
+extern "C" {
+    const char* heidic_format_mesh_name(int32_t instance_id);
 }
 extern "C" {
     void heidic_imgui_init(GLFWwindow* window);
@@ -194,6 +311,12 @@ extern "C" {
 }
 extern "C" {
     float heidic_imgui_drag_float(const char* label, float v, float speed);
+}
+extern "C" {
+    float heidic_imgui_slider_float(const char* label, float v, float v_min, float v_max);
+}
+extern "C" {
+    float heidic_imgui_input_float(const char* label, float v, float step, float step_fast);
 }
 extern "C" {
     int32_t heidic_imgui_begin_main_menu_bar();
@@ -277,6 +400,9 @@ extern "C" {
     int32_t heidic_show_open_dialog();
 }
 extern "C" {
+    int32_t heidic_show_open_mesh_dialog();
+}
+extern "C" {
     float heidic_get_fps();
 }
 extern "C" {
@@ -343,6 +469,9 @@ extern "C" {
     void heidic_set_cursor_mode(GLFWwindow* window, int32_t mode);
 }
 extern "C" {
+    int32_t heidic_imgui_wants_mouse();
+}
+extern "C" {
     Vec3 heidic_get_mouse_ray_origin(GLFWwindow* window);
 }
 extern "C" {
@@ -377,6 +506,18 @@ extern "C" {
 }
 extern "C" {
     int32_t heidic_gizmo_is_interacting();
+}
+extern "C" {
+    float heidic_gizmo_scale(GLFWwindow* window, float center_x, float center_y, float center_z, float bbox_min_x, float bbox_min_y, float bbox_min_z, float bbox_max_x, float bbox_max_y, float bbox_max_z, float current_scale);
+}
+extern "C" {
+    int32_t heidic_gizmo_scale_is_interacting();
+}
+extern "C" {
+    Vec3 heidic_gizmo_rotate(GLFWwindow* window, float x, float y, float z, float current_rx, float current_ry, float current_rz);
+}
+extern "C" {
+    int32_t heidic_gizmo_rotate_is_interacting();
 }
 extern "C" {
     int32_t heidic_create_cube(float x, float y, float z, float sx, float sy, float sz);
@@ -514,6 +655,9 @@ extern "C" {
     void heidic_combine_selected_cubes();
 }
 extern "C" {
+    int32_t heidic_combine_selected_cubes_to_mesh(const char* filepath);
+}
+extern "C" {
     void heidic_load_texture_list();
 }
 extern "C" {
@@ -599,6 +743,11 @@ int heidic_main() {
         float  selected_cube_sz = 0;
         int32_t  has_selection = 0;
         float  selected_cube_index = -1;
+        int32_t  selected_mesh_instance_id = -1;
+        float  selected_mesh_x = 0;
+        float  selected_mesh_y = 0;
+        float  selected_mesh_z = 0;
+        int32_t  has_mesh_selection = 0;
         int32_t  is_grounded = 0;
         int32_t  mouse_left_was_pressed = 0;
         int32_t  mouse_middle_was_pressed = 0;
@@ -1008,6 +1157,22 @@ int heidic_main() {
                 } else {
                     space_was_pressed = 0;
                 }
+                int32_t  m_is_pressed = heidic_is_key_pressed(window, 77);
+                int32_t  ctrl_is_down = heidic_ctrl_down(window);
+                if (((m_is_pressed == 1) && (ctrl_is_down == 1))) {
+                    int32_t  selected_count = heidic_get_selection_count();
+                    if ((selected_count > 0)) {
+                        std::string  mesh_filepath = "meshes/combined_mesh.hdm";
+                        int32_t  result = heidic_combine_selected_cubes_to_mesh(mesh_filepath.c_str());
+                        if ((result == 1)) {
+                            std::cout << "Successfully combined selected cubes into mesh: " << std::endl;
+                            std::cout << mesh_filepath << std::endl;
+                            std::cout << "\n" << std::endl;
+                        } else {
+                            std::cout << "Failed to combine cubes into mesh\n" << std::endl;
+                        }
+                    }
+                }
                 int32_t  c_is_pressed = heidic_is_key_pressed(window, 67);
                 if ((c_is_pressed == 1)) {
                     if ((combine_c_was_pressed == 0)) {
@@ -1205,6 +1370,16 @@ int heidic_main() {
                             selected_cube_sy = default_cube_size;
                             selected_cube_sz = default_cube_size;
                         }
+                        if ((heidic_imgui_menu_item("Load Mesh") == 1)) {
+                            int32_t  mesh_id = heidic_show_open_mesh_dialog();
+                            if ((mesh_id >= 0)) {
+                                std::cout << "Successfully loaded mesh with ID: " << std::endl;
+                                std::cout << mesh_id << std::endl;
+                                std::cout << "\n" << std::endl;
+                            } else {
+                                std::cout << "Failed to load mesh or user cancelled\n" << std::endl;
+                            }
+                        }
                         heidic_imgui_end_menu();
                     }
                     heidic_imgui_end_main_menu_bar();
@@ -1262,6 +1437,54 @@ int heidic_main() {
                     cube_draw_index = (cube_draw_index + 1);
                 }
                 heidic_flush_colored_cubes();
+                int32_t  mesh_instance_count = heidic_get_mesh_instance_total_count();
+                if ((mesh_instance_count > 0)) {
+                    heidic_load_texture_for_rendering("default.bmp");
+                    int32_t  mesh_instance_index = 0;
+                    while ((mesh_instance_index < mesh_instance_count)) {
+                        if ((heidic_get_mesh_instance_active(mesh_instance_index) == 1)) {
+                            int32_t  instance_mesh_id = heidic_get_mesh_instance_mesh_id(mesh_instance_index);
+                            float  instance_x = heidic_get_mesh_instance_x(mesh_instance_index);
+                            float  instance_y = heidic_get_mesh_instance_y(mesh_instance_index);
+                            float  instance_z = heidic_get_mesh_instance_z(mesh_instance_index);
+                            float  mesh_center_x = heidic_get_mesh_instance_center_x(mesh_instance_index);
+                            float  mesh_center_y = heidic_get_mesh_instance_center_y(mesh_instance_index);
+                            float  mesh_center_z = heidic_get_mesh_instance_center_z(mesh_instance_index);
+                            float  mesh_sx = heidic_get_mesh_instance_sx(mesh_instance_index);
+                            float  mesh_sy = heidic_get_mesh_instance_sy(mesh_instance_index);
+                            float  mesh_sz = heidic_get_mesh_instance_sz(mesh_instance_index);
+                            float  mesh_rx = heidic_get_mesh_instance_rx(mesh_instance_index);
+                            float  mesh_ry = heidic_get_mesh_instance_ry(mesh_instance_index);
+                            float  mesh_rz = heidic_get_mesh_instance_rz(mesh_instance_index);
+                            float  world_x = (instance_x + mesh_center_x);
+                            float  world_y = (instance_y + mesh_center_y);
+                            float  world_z = (instance_z + mesh_center_z);
+                            heidic_draw_mesh_scaled_with_center(instance_mesh_id, instance_x, instance_y, instance_z, mesh_rx, mesh_ry, mesh_rz, mesh_sx, mesh_sy, mesh_sz, mesh_center_x, mesh_center_y, mesh_center_z);
+                            if ((heidic_is_mesh_selected(mesh_instance_index) == 1)) {
+                                float  bbox_min_x = heidic_get_mesh_instance_bbox_min_x(mesh_instance_index);
+                                float  bbox_min_y = heidic_get_mesh_instance_bbox_min_y(mesh_instance_index);
+                                float  bbox_min_z = heidic_get_mesh_instance_bbox_min_z(mesh_instance_index);
+                                float  bbox_max_x = heidic_get_mesh_instance_bbox_max_x(mesh_instance_index);
+                                float  bbox_max_y = heidic_get_mesh_instance_bbox_max_y(mesh_instance_index);
+                                float  bbox_max_z = heidic_get_mesh_instance_bbox_max_z(mesh_instance_index);
+                                float  scaled_min_x = (bbox_min_x * mesh_sx);
+                                float  scaled_min_y = (bbox_min_y * mesh_sy);
+                                float  scaled_min_z = (bbox_min_z * mesh_sz);
+                                float  scaled_max_x = (bbox_max_x * mesh_sx);
+                                float  scaled_max_y = (bbox_max_y * mesh_sy);
+                                float  scaled_max_z = (bbox_max_z * mesh_sz);
+                                float  bbox_center_x = world_x;
+                                float  bbox_center_y = world_y;
+                                float  bbox_center_z = world_z;
+                                float  bbox_size_x = (scaled_max_x - scaled_min_x);
+                                float  bbox_size_y = (scaled_max_y - scaled_min_y);
+                                float  bbox_size_z = (scaled_max_z - scaled_min_z);
+                                heidic_draw_cube_wireframe(bbox_center_x, bbox_center_y, bbox_center_z, 0, 0, 0, bbox_size_x, bbox_size_y, bbox_size_z, 1, 1, 0);
+                            }
+                        }
+                        mesh_instance_index = (mesh_instance_index + 1);
+                    }
+                }
                 heidic_draw_ray(window, 50000, 1, 1, 0);
                 Vec3  debug_ray_origin = heidic_get_mouse_ray_origin(window);
                 Vec3  debug_ray_dir = heidic_get_mouse_ray_dir(window);
@@ -1548,6 +1771,34 @@ int heidic_main() {
                 } else {
                     mouse_mode_right_was_pressed = 0;
                 }
+                int32_t  gizmo_clicked = 0;
+                if ((((((mouse_mode == 1) && (mouse_left_pressed == 1)) && (alt_pressed == 0)) && (has_mesh_selection == 1)) && (selected_mesh_instance_id >= 0))) {
+                    float  mesh_center_x = heidic_get_mesh_instance_center_x(selected_mesh_instance_id);
+                    float  mesh_center_y = heidic_get_mesh_instance_center_y(selected_mesh_instance_id);
+                    float  mesh_center_z = heidic_get_mesh_instance_center_z(selected_mesh_instance_id);
+                    float  gizmo_x = (selected_mesh_x + mesh_center_x);
+                    float  gizmo_y = (selected_mesh_y + mesh_center_y);
+                    float  gizmo_z = (selected_mesh_z + mesh_center_z);
+                    float  current_scale = heidic_get_mesh_instance_sx(selected_mesh_instance_id);
+                    Vec3  temp_pos = heidic_gizmo_translate(window, gizmo_x, gizmo_y, gizmo_z);
+                    int32_t  translate_interacting = heidic_gizmo_is_interacting();
+                    float  bbox_min_x = heidic_get_mesh_instance_bbox_min_x(selected_mesh_instance_id);
+                    float  bbox_min_y = heidic_get_mesh_instance_bbox_min_y(selected_mesh_instance_id);
+                    float  bbox_min_z = heidic_get_mesh_instance_bbox_min_z(selected_mesh_instance_id);
+                    float  bbox_max_x = heidic_get_mesh_instance_bbox_max_x(selected_mesh_instance_id);
+                    float  bbox_max_y = heidic_get_mesh_instance_bbox_max_y(selected_mesh_instance_id);
+                    float  bbox_max_z = heidic_get_mesh_instance_bbox_max_z(selected_mesh_instance_id);
+                    float  temp_scale = heidic_gizmo_scale(window, gizmo_x, gizmo_y, gizmo_z, bbox_min_x, bbox_min_y, bbox_min_z, bbox_max_x, bbox_max_y, bbox_max_z, current_scale);
+                    int32_t  scale_interacting = heidic_gizmo_scale_is_interacting();
+                    float  current_rx = heidic_get_mesh_instance_rx(selected_mesh_instance_id);
+                    float  current_ry = heidic_get_mesh_instance_ry(selected_mesh_instance_id);
+                    float  current_rz = heidic_get_mesh_instance_rz(selected_mesh_instance_id);
+                    Vec3  temp_rot = heidic_gizmo_rotate(window, gizmo_x, gizmo_y, gizmo_z, current_rx, current_ry, current_rz);
+                    int32_t  rotate_interacting = heidic_gizmo_rotate_is_interacting();
+                    if ((((translate_interacting == 1) || (scale_interacting == 1)) || (rotate_interacting == 1))) {
+                        gizmo_clicked = 1;
+                    }
+                }
                 if ((((mouse_mode == 1) && (mouse_left_pressed == 1)) && (alt_pressed == 0))) {
                     int32_t  ctrl_left_pressed = heidic_is_key_pressed(window, 341);
                     int32_t  ctrl_right_pressed = heidic_is_key_pressed(window, 345);
@@ -1556,10 +1807,12 @@ int heidic_main() {
                         ctrl_pressed = 1;
                     }
                     int32_t  interacting = 0;
+                    int32_t  scale_interacting = 0;
                     if ((mouse_left_was_pressed == 1)) {
                         interacting = heidic_gizmo_is_interacting();
+                        scale_interacting = heidic_gizmo_scale_is_interacting();
                     }
-                    if ((interacting == 0)) {
+                    if (((gizmo_clicked == 0) && ((interacting == 0) && (scale_interacting == 0)))) {
                         if ((mouse_left_was_pressed == 0)) {
                             float  closest_dist = 100000000000;
                             int32_t  hit_cube_index = -1;
@@ -1612,10 +1865,14 @@ int heidic_main() {
                                 dolly_orbit_azimuth = 0;
                                 dolly_orbit_elevation = 45;
                             } else {
-                                if ((ctrl_pressed == 0)) {
+                                int32_t  imgui_wants_mouse = heidic_imgui_wants_mouse();
+                                if ((((ctrl_pressed == 0) && (gizmo_clicked == 0)) && (imgui_wants_mouse == 0))) {
                                     heidic_clear_selection();
                                     has_selection = 0;
                                     selected_cube_index = -1;
+                                    heidic_clear_mesh_selection();
+                                    has_mesh_selection = 0;
+                                    selected_mesh_instance_id = -1;
                                 }
                             }
                             mouse_left_was_pressed = 1;
@@ -1634,6 +1891,47 @@ int heidic_main() {
                 if ((selected_cube_index >= 2)) {
                     float  cube_storage_index = (selected_cube_index - 2);
                     heidic_set_cube_pos_f(cube_storage_index, selected_cube_x, selected_cube_y, selected_cube_z);
+                }
+            }
+            if (((has_mesh_selection == 1) && (selected_mesh_instance_id >= 0))) {
+                float  mesh_center_x = heidic_get_mesh_instance_center_x(selected_mesh_instance_id);
+                float  mesh_center_y = heidic_get_mesh_instance_center_y(selected_mesh_instance_id);
+                float  mesh_center_z = heidic_get_mesh_instance_center_z(selected_mesh_instance_id);
+                float  current_scale = heidic_get_mesh_instance_sx(selected_mesh_instance_id);
+                float  gizmo_x = (selected_mesh_x + mesh_center_x);
+                float  gizmo_y = (selected_mesh_y + mesh_center_y);
+                float  gizmo_z = (selected_mesh_z + mesh_center_z);
+                int32_t  scale_interacting = heidic_gizmo_scale_is_interacting();
+                int32_t  translate_interacting = heidic_gizmo_is_interacting();
+                float  bbox_min_x = heidic_get_mesh_instance_bbox_min_x(selected_mesh_instance_id);
+                float  bbox_min_y = heidic_get_mesh_instance_bbox_min_y(selected_mesh_instance_id);
+                float  bbox_min_z = heidic_get_mesh_instance_bbox_min_z(selected_mesh_instance_id);
+                float  bbox_max_x = heidic_get_mesh_instance_bbox_max_x(selected_mesh_instance_id);
+                float  bbox_max_y = heidic_get_mesh_instance_bbox_max_y(selected_mesh_instance_id);
+                float  bbox_max_z = heidic_get_mesh_instance_bbox_max_z(selected_mesh_instance_id);
+                float  new_scale = heidic_gizmo_scale(window, gizmo_x, gizmo_y, gizmo_z, bbox_min_x, bbox_min_y, bbox_min_z, bbox_max_x, bbox_max_y, bbox_max_z, current_scale);
+                if ((new_scale != current_scale)) {
+                    heidic_set_mesh_instance_scale(selected_mesh_instance_id, new_scale, new_scale, new_scale);
+                }
+                float  current_rx = heidic_get_mesh_instance_rx(selected_mesh_instance_id);
+                float  current_ry = heidic_get_mesh_instance_ry(selected_mesh_instance_id);
+                float  current_rz = heidic_get_mesh_instance_rz(selected_mesh_instance_id);
+                int32_t  rotate_interacting = heidic_gizmo_rotate_is_interacting();
+                Vec3  new_rotation = heidic_gizmo_rotate(window, gizmo_x, gizmo_y, gizmo_z, current_rx, current_ry, current_rz);
+                if ((((new_rotation.x != current_rx) || (new_rotation.y != current_ry)) || (new_rotation.z != current_rz))) {
+                    heidic_set_mesh_instance_rotation(selected_mesh_instance_id, new_rotation.x, new_rotation.y, new_rotation.z);
+                }
+                if (((scale_interacting == 0) && (rotate_interacting == 0))) {
+                    Vec3  new_gizmo_pos = heidic_gizmo_translate(window, gizmo_x, gizmo_y, gizmo_z);
+                    if ((translate_interacting == 1)) {
+                        float  new_instance_x = (new_gizmo_pos.x - mesh_center_x);
+                        float  new_instance_y = (new_gizmo_pos.y - mesh_center_y);
+                        float  new_instance_z = (new_gizmo_pos.z - mesh_center_z);
+                        selected_mesh_x = new_instance_x;
+                        selected_mesh_y = new_instance_y;
+                        selected_mesh_z = new_instance_z;
+                        heidic_set_mesh_instance_pos(selected_mesh_instance_id, selected_mesh_x, selected_mesh_y, selected_mesh_z);
+                    }
                 }
             }
             if ((show_debug == 1)) {
@@ -1733,7 +2031,93 @@ int heidic_main() {
                         }
                         cube_index = (cube_index + 1);
                     }
+                    int32_t  mesh_instance_count = heidic_get_mesh_instance_total_count();
+                    if ((mesh_instance_count > 0)) {
+                        heidic_imgui_separator();
+                        heidic_imgui_text("Meshes:");
+                        int32_t  mesh_instance_index = 0;
+                        while ((mesh_instance_index < mesh_instance_count)) {
+                            if ((heidic_get_mesh_instance_active(mesh_instance_index) == 1)) {
+                                heidic_imgui_push_id((mesh_instance_index + 10000));
+                                std::string  mesh_name = heidic_format_mesh_name(mesh_instance_index);
+                                int32_t  is_mesh_selected = heidic_is_mesh_selected(mesh_instance_index);
+                                if ((heidic_imgui_selectable_str(mesh_name.c_str()) == 1)) {
+                                    if ((is_mesh_selected == 1)) {
+                                        heidic_clear_mesh_selection();
+                                        has_mesh_selection = 0;
+                                        selected_mesh_instance_id = -1;
+                                    } else {
+                                        heidic_clear_selection();
+                                        heidic_clear_mesh_selection();
+                                        heidic_add_mesh_to_selection(mesh_instance_index);
+                                        selected_mesh_instance_id = mesh_instance_index;
+                                        selected_mesh_x = heidic_get_mesh_instance_x(mesh_instance_index);
+                                        selected_mesh_y = heidic_get_mesh_instance_y(mesh_instance_index);
+                                        selected_mesh_z = heidic_get_mesh_instance_z(mesh_instance_index);
+                                        has_mesh_selection = 1;
+                                        has_selection = 0;
+                                        selected_cube_index = -1;
+                                    }
+                                }
+                                heidic_imgui_pop_id();
+                            }
+                            mesh_instance_index = (mesh_instance_index + 1);
+                        }
+                    }
                     heidic_imgui_end();
+                }
+                if (((has_mesh_selection == 1) && (selected_mesh_instance_id >= 0))) {
+                    if ((heidic_imgui_begin("Rotation Control") == 1)) {
+                        float  current_rx = heidic_get_mesh_instance_rx(selected_mesh_instance_id);
+                        float  current_ry = heidic_get_mesh_instance_ry(selected_mesh_instance_id);
+                        float  current_rz = heidic_get_mesh_instance_rz(selected_mesh_instance_id);
+                        float  new_rx_slider = heidic_imgui_slider_float("Rotation X", current_rx, 0, 360);
+                        float  new_rx_input = heidic_imgui_input_float("##RX", current_rx, 1, 10);
+                        float  new_rx = new_rx_slider;
+                        if ((new_rx_input != current_rx)) {
+                            new_rx = new_rx_input;
+                        }
+                        if ((new_rx != current_rx)) {
+                            if ((new_rx < 0)) {
+                                new_rx = 0;
+                            }
+                            if ((new_rx > 360)) {
+                                new_rx = 360;
+                            }
+                            heidic_set_mesh_instance_rotation(selected_mesh_instance_id, new_rx, current_ry, current_rz);
+                        }
+                        float  new_ry_slider = heidic_imgui_slider_float("Rotation Y", current_ry, 0, 360);
+                        float  new_ry_input = heidic_imgui_input_float("##RY", current_ry, 1, 10);
+                        float  new_ry = new_ry_slider;
+                        if ((new_ry_input != current_ry)) {
+                            new_ry = new_ry_input;
+                        }
+                        if ((new_ry != current_ry)) {
+                            if ((new_ry < 0)) {
+                                new_ry = 0;
+                            }
+                            if ((new_ry > 360)) {
+                                new_ry = 360;
+                            }
+                            heidic_set_mesh_instance_rotation(selected_mesh_instance_id, current_rx, new_ry, current_rz);
+                        }
+                        float  new_rz_slider = heidic_imgui_slider_float("Rotation Z", current_rz, 0, 360);
+                        float  new_rz_input = heidic_imgui_input_float("##RZ", current_rz, 1, 10);
+                        float  new_rz = new_rz_slider;
+                        if ((new_rz_input != current_rz)) {
+                            new_rz = new_rz_input;
+                        }
+                        if ((new_rz != current_rz)) {
+                            if ((new_rz < 0)) {
+                                new_rz = 0;
+                            }
+                            if ((new_rz > 360)) {
+                                new_rz = 360;
+                            }
+                            heidic_set_mesh_instance_rotation(selected_mesh_instance_id, current_rx, current_ry, new_rz);
+                        }
+                        heidic_imgui_end();
+                    }
                 }
                 if ((heidic_imgui_begin("Texture Swatches") == 1)) {
                     heidic_load_texture_list();
