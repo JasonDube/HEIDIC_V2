@@ -98,10 +98,14 @@ fn main(): void {
     let selected_cube_sy: f32 = 0.0;
     let selected_cube_sz: f32 = 0.0;
     let has_selection: i32 = 0; // 0 = no selection, 1 = has selection
+    
+    // Stored preview position (calculated every frame, used for actual placement)
+    let stored_preview_pos: Vec3 = heidic_vec3(0.0, 0.0, 0.0);
+    let stored_preview_valid: i32 = 0; // 1 = preview position is valid and ready to use
     let selected_cube_index: f32 = -1.0; // -1.0 = none, 0.0 = player, >= 2.0 = created cubes, >= 10000.0 = mesh instances
     
     // Mesh selection state
-    let selected_mesh_instance_id: i32 = -1; // -1 = none, >= 0 = mesh instance ID
+        let selected_mesh_instance_id: i32 = -1; // -1 = none, >= 0 = mesh instance ID
     let selected_mesh_x: f32 = 0.0;
     let selected_mesh_y: f32 = 0.0;
     let selected_mesh_z: f32 = 0.0;
@@ -116,9 +120,11 @@ fn main(): void {
     
     // Delete key state tracking
     let delete_was_pressed: i32 = 0;
+    let key_0_was_pressed: i32 = 0;  // Key '0' for wedge creation
     
     // C key state tracking (for combining cubes - separate from camera toggle C key)
     let combine_c_was_pressed: i32 = 0;
+    let smooth_s_was_pressed: i32 = 0;
     
     // Level name buffer for input (managed by C++ side)
     // We'll use heidic_get_level_name() to get the current name
@@ -193,6 +199,8 @@ fn main(): void {
             f1_was_pressed = 0;
         }
         
+        // Component Mode Toggle (Key '1' = component mode, Key '2' = object mode)
+        // Key code 49 = '1', 50 = '2'
         // Tab Key Toggle Logic (258 is Tab) - Switch between Top-Down and FPS camera
         let tab_is_pressed: i32 = heidic_is_key_pressed(window, 258);
         if tab_is_pressed == 1 {
@@ -475,12 +483,20 @@ fn main(): void {
                 // Default cube size (1 meter = 100 units)
                 let default_cube_size: f32 = 100.0;
                 
-                // Always use mouse ray to find where to place the cube
-                let create_ray_origin: Vec3 = heidic_get_mouse_ray_origin(window);
-                let create_ray_dir: Vec3 = heidic_get_mouse_ray_dir(window);
-                
-                // First, check if ray hits any existing cubes (find closest hit)
+                // Use the stored preview position if available (calculated this frame)
+                // This ensures exact match between preview and placement
                 let create_pos: Vec3 = heidic_vec3(0.0, 0.0, 0.0);
+                if stored_preview_valid == 1 {
+                    // Use the preview position directly - this is exactly where the red cube is
+                    create_pos = stored_preview_pos;
+                    print("Using stored preview position for cube placement\n");
+                } else {
+                    // Fallback: calculate placement (shouldn't happen, but just in case)
+                    print("WARNING: No valid preview position, calculating placement\n");
+                    
+                    // Always use mouse ray to find where to place the cube
+                    let create_ray_origin: Vec3 = heidic_get_mouse_ray_origin(window);
+                    let create_ray_dir: Vec3 = heidic_get_mouse_ray_dir(window);
                 let found_hit: i32 = 0;
                 let closest_dist: f32 = 100000000000.0; // Very large distance
                 let hit_cube_x: f32 = 0.0;
@@ -491,6 +507,7 @@ fn main(): void {
                 let hit_cube_sz: f32 = 0.0;
                 let hit_point: Vec3 = heidic_vec3(0.0, 0.0, 0.0);
                 let is_ground_plane: i32 = 0;
+                let is_wedge: i32 = 0; // 1 = hit object is a wedge, 0 = cube or other
                 
                 // FIRST: Test the big grey ground plane cube (100m x 100m x 1m at y = -500)
                 // This is important geometry and needs to be pickable!
@@ -556,7 +573,7 @@ fn main(): void {
                 }
                 
                 if found_hit == 1 {
-                    // Ray hit a cube or ground plane - determine which face was hit and stack accordingly
+                    // Ray hit a cube or ground plane - use same calculation as preview
                     if is_ground_plane == 1 {
                         // Ground plane: always stack on top
                         let hit_top_y: f32 = hit_cube_y + hit_cube_sy / 2.0;
@@ -565,8 +582,8 @@ fn main(): void {
                         create_pos.z = hit_point.z;
                         print("Hit ground plane! Stacking on top\n");
                     } else {
-                        // Regular cube: determine which face was hit
-                        // Calculate cube bounds
+                        // Regular cube or wedge: use exact same calculation as preview
+                        // Calculate bounds
                         let cube_min_x: f32 = hit_cube_x - hit_cube_sx / 2.0;
                         let cube_max_x: f32 = hit_cube_x + hit_cube_sx / 2.0;
                         let cube_min_y: f32 = hit_cube_y - hit_cube_sy / 2.0;
@@ -582,32 +599,44 @@ fn main(): void {
                         let dist_to_back: f32 = hit_point.z - cube_min_z;
                         let dist_to_front: f32 = cube_max_z - hit_point.z;
                         
-                        // Find the closest face (smallest distance)
+                        // Find the closest face (same logic as preview)
                         let min_dist: f32 = dist_to_left;
                         let hit_face: i32 = 0; // 0=left, 1=right, 2=bottom, 3=top, 4=back, 5=front
                         
-                        if dist_to_right < min_dist {
-                            min_dist = dist_to_right;
-                            hit_face = 1;
-                        }
-                        if dist_to_bottom < min_dist {
-                            min_dist = dist_to_bottom;
-                            hit_face = 2;
-                        }
-                        if dist_to_top < min_dist {
-                            min_dist = dist_to_top;
-                            hit_face = 3;
-                        }
-                        if dist_to_back < min_dist {
-                            min_dist = dist_to_back;
-                            hit_face = 4;
-                        }
-                        if dist_to_front < min_dist {
-                            min_dist = dist_to_front;
-                            hit_face = 5;
+                        if is_wedge == 1 {
+                            // For wedges, only check back (4) and right (1) faces
+                            if dist_to_back < dist_to_right {
+                                min_dist = dist_to_back;
+                                hit_face = 4; // Back face (z = -0.5, the flat front of the wedge)
+                            } else {
+                                min_dist = dist_to_right;
+                                hit_face = 1; // Right face (x = 0.5)
+                            }
+                        } else {
+                            // For cubes, check all faces
+                            if dist_to_right < min_dist {
+                                min_dist = dist_to_right;
+                                hit_face = 1;
+                            }
+                            if dist_to_bottom < min_dist {
+                                min_dist = dist_to_bottom;
+                                hit_face = 2;
+                            }
+                            if dist_to_top < min_dist {
+                                min_dist = dist_to_top;
+                                hit_face = 3;
+                            }
+                            if dist_to_back < min_dist {
+                                min_dist = dist_to_back;
+                                hit_face = 4;
+                            }
+                            if dist_to_front < min_dist {
+                                min_dist = dist_to_front;
+                                hit_face = 5;
+                            }
                         }
                         
-                        // Place new cube adjacent to the hit face
+                        // Calculate placement position (exact same logic as preview)
                         if hit_face == 0 {
                             // Left face (negative X) - stack to the left
                             create_pos.x = cube_min_x - default_cube_size / 2.0;
@@ -659,6 +688,7 @@ fn main(): void {
                     create_pos = heidic_vec3_add(create_ray_origin, heidic_vec3_mul_scalar(create_ray_dir, 500.0));
                     print("No hit, placing cube along ray\n");
                 }
+                } // End of fallback calculation (if stored_preview_valid == 0)
                 
                 // Generate random color for the new cube
                 // Use white color (1,1,1) so texture displays at full brightness
@@ -695,6 +725,62 @@ fn main(): void {
                 space_was_pressed = 0;
             }
             
+            // Key '0' (48) - Create wedge at mouse ray hit point (simplified - just stack on top)
+            let key_0_pressed: i32 = heidic_is_key_pressed(window, 48);
+            if key_0_pressed == 1 {
+                if key_0_was_pressed == 0 {
+                    print("KEY '0' PRESSED! Creating wedge at ray hit point\n");
+                    
+                    // Default wedge size (1 meter = 100 units, same as cube)
+                    let default_wedge_size: f32 = 100.0;
+                    
+                    // Always use mouse ray to find where to place the wedge
+                    let create_ray_origin: Vec3 = heidic_get_mouse_ray_origin(window);
+                    let create_ray_dir: Vec3 = heidic_get_mouse_ray_dir(window);
+                    
+                    // Simple: just test ground plane and place wedge on top
+                    let create_pos: Vec3 = heidic_vec3(0.0, 0.0, 0.0);
+                    let found_hit: i32 = 0;
+                    
+                    // Test ground plane
+                    let ground_cube_x: f32 = 0.0;
+                    let ground_cube_y: f32 = -500.0;
+                    let ground_cube_z: f32 = 0.0;
+                    let ground_cube_sx: f32 = 10000.0;
+                    let ground_cube_sy: f32 = 100.0;
+                    let ground_cube_sz: f32 = 10000.0;
+                    
+                    let ground_cube_hit: i32 = heidic_raycast_cube_hit(window, ground_cube_x, ground_cube_y, ground_cube_z, ground_cube_sx, ground_cube_sy, ground_cube_sz);
+                    if ground_cube_hit == 1 {
+                        let ground_cube_hit_point: Vec3 = heidic_raycast_cube_hit_point(window, ground_cube_x, ground_cube_y, ground_cube_z, ground_cube_sx, ground_cube_sy, ground_cube_sz);
+                        create_pos.y = ground_cube_y + ground_cube_sy / 2.0 + default_wedge_size / 2.0;
+                        create_pos.x = ground_cube_hit_point.x;
+                        create_pos.z = ground_cube_hit_point.z;
+                        found_hit = 1;
+                    } else {
+                        // No hit - place wedge 5 meters (500 units) along the ray
+                        create_pos = heidic_vec3_add(create_ray_origin, heidic_vec3_mul_scalar(create_ray_dir, 500.0));
+                    }
+                    
+                    // Create wedge with white color (full texture brightness)
+                    let wedge_r: f32 = 1.0;
+                    let wedge_g: f32 = 1.0;
+                    let wedge_b: f32 = 1.0;
+                    
+                    let wedge_index: i32 = heidic_create_wedge_with_color(create_pos.x, create_pos.y, create_pos.z, default_wedge_size, default_wedge_size, default_wedge_size, wedge_r, wedge_g, wedge_b);
+                    
+                    if wedge_index >= 0 {
+                        print("Created wedge at index: ");
+                        print(wedge_index);
+                        print("\n");
+                    }
+                    
+                    key_0_was_pressed = 1;
+                }
+            } else {
+                key_0_was_pressed = 0;
+            }
+            
             // Ctrl+M (77 is 'M') - Combine selected cubes into mesh and save as .hdm
             let m_is_pressed: i32 = heidic_is_key_pressed(window, 77);
             let ctrl_is_down: i32 = heidic_ctrl_down(window);
@@ -716,6 +802,38 @@ fn main(): void {
                     }
                 }
             }
+        
+        // Shift+S (83 is 'S') - Smooth selected cubes
+        // Check shift state (reuse same logic as Shift+Enter)
+        let s_is_pressed: i32 = heidic_is_key_pressed(window, 83);
+        let s_shift_is_pressed: i32 = 0;
+        let s_left_shift: i32 = heidic_is_key_pressed(window, 340);
+        let s_right_shift: i32 = heidic_is_key_pressed(window, 344);
+        if s_left_shift == 1 {
+            s_shift_is_pressed = 1;
+        }
+        if s_right_shift == 1 {
+            s_shift_is_pressed = 1;
+        }
+        
+        if s_is_pressed == 1 && s_shift_is_pressed == 1 {
+            if smooth_s_was_pressed == 0 {
+                let selected_count: i32 = heidic_get_selection_count();
+                if selected_count > 0 {
+                    let result: i32 = heidic_smooth_selected_cubes();
+                    if result == 1 {
+                        print("Successfully smoothed selected cubes\n");
+                    } else {
+                        print("Failed to smooth cubes\n");
+                    }
+                } else {
+                    print("No cubes selected for smoothing\n");
+                }
+                smooth_s_was_pressed = 1;
+            }
+        } else {
+            smooth_s_was_pressed = 0;
+        }
         
         // C key (67) - Combine selected cubes
         let c_is_pressed: i32 = heidic_is_key_pressed(window, 67);
@@ -1099,20 +1217,67 @@ fn main(): void {
                 let cube_sx: f32 = heidic_get_cube_sx(cube_draw_index);
                 let cube_sy: f32 = heidic_get_cube_sy(cube_draw_index);
                 let cube_sz: f32 = heidic_get_cube_sz(cube_draw_index);
+                let cube_rx: f32 = heidic_get_cube_rx(cube_draw_index);
+                let cube_ry: f32 = heidic_get_cube_ry(cube_draw_index);
+                let cube_rz: f32 = heidic_get_cube_rz(cube_draw_index);
                 
                 // Draw cube with white color (1,1,1) so texture displays at full brightness without tinting
-                heidic_draw_cube_colored(cube_x, cube_y, cube_z, 0.0, 0.0, 0.0, cube_sx, cube_sy, cube_sz, 1.0, 1.0, 1.0);
+                heidic_draw_cube_colored(cube_x, cube_y, cube_z, cube_rx, cube_ry, cube_rz, cube_sx, cube_sy, cube_sz, 1.0, 1.0, 1.0);
                 
                 // Draw wireframe outline for selected cubes
                 if heidic_is_cube_selected(cube_draw_index) == 1 {
                     // Draw wireframe outline (slightly larger than cube, white color)
-                    heidic_draw_cube_wireframe(cube_x, cube_y, cube_z, 0.0, 0.0, 0.0, cube_sx * 1.01, cube_sy * 1.01, cube_sz * 1.01, 1.0, 1.0, 1.0);
+                    heidic_draw_cube_wireframe(cube_x, cube_y, cube_z, cube_rx, cube_ry, cube_rz, cube_sx * 1.01, cube_sy * 1.01, cube_sz * 1.01, 1.0, 1.0, 1.0);
                 }
             }
             cube_draw_index = cube_draw_index + 1;
         }
         
         // Flush any remaining batched cubes at the end (draw final texture group)
+        heidic_flush_colored_cubes();
+        
+        // Draw Created Wedges (user-created via '0' key)
+        let wedge_total_count: i32 = heidic_get_wedge_total_count();
+        let wedge_draw_index: i32 = 0;
+        let first_wedge: i32 = 1;
+        let current_wedge_texture: string = "";
+        
+        while wedge_draw_index < wedge_total_count {
+            if heidic_get_wedge_active(wedge_draw_index) == 1 {
+                let wedge_texture_name: string = heidic_get_wedge_texture_name(wedge_draw_index);
+                if wedge_texture_name == "" {
+                    wedge_texture_name = "default.bmp";
+                }
+                
+                if first_wedge == 0 && wedge_texture_name != current_wedge_texture {
+                    heidic_flush_colored_cubes();
+                    heidic_load_texture_for_rendering(wedge_texture_name);
+                    current_wedge_texture = wedge_texture_name;
+                } else {
+                    if first_wedge == 1 {
+                        heidic_load_texture_for_rendering(wedge_texture_name);
+                        current_wedge_texture = wedge_texture_name;
+                        first_wedge = 0;
+                    }
+                }
+                
+                let wedge_x: f32 = heidic_get_wedge_x(wedge_draw_index);
+                let wedge_y: f32 = heidic_get_wedge_y(wedge_draw_index);
+                let wedge_z: f32 = heidic_get_wedge_z(wedge_draw_index);
+                let wedge_sx: f32 = heidic_get_wedge_sx(wedge_draw_index);
+                let wedge_sy: f32 = heidic_get_wedge_sy(wedge_draw_index);
+                let wedge_sz: f32 = heidic_get_wedge_sz(wedge_draw_index);
+                let wedge_rx: f32 = heidic_get_wedge_rx(wedge_draw_index);
+                let wedge_ry: f32 = heidic_get_wedge_ry(wedge_draw_index);
+                let wedge_rz: f32 = heidic_get_wedge_rz(wedge_draw_index);
+                
+                // Draw wedge with white color (full texture brightness)
+                heidic_draw_wedge_colored(wedge_x, wedge_y, wedge_z, wedge_rx, wedge_ry, wedge_rz, wedge_sx, wedge_sy, wedge_sz, 1.0, 1.0, 1.0);
+            }
+            wedge_draw_index = wedge_draw_index + 1;
+        }
+        
+        // Flush any remaining batched wedges
         heidic_flush_colored_cubes();
         
         // Draw all loaded mesh instances (from .hdm files)
@@ -1152,6 +1317,7 @@ fn main(): void {
                     heidic_draw_mesh_scaled_with_center(instance_mesh_id, instance_x, instance_y, instance_z, mesh_rx, mesh_ry, mesh_rz, mesh_sx, mesh_sy, mesh_sz, mesh_center_x, mesh_center_y, mesh_center_z);
                     
                     // Draw wireframe bounding box for selected meshes
+                    // NOTE: Bounding box is drawn with rotation to match the mesh transform
                     if heidic_is_mesh_selected(mesh_instance_index) == 1 {
                         // Get bounding box (relative to mesh center)
                         let bbox_min_x: f32 = heidic_get_mesh_instance_bbox_min_x(mesh_instance_index);
@@ -1170,15 +1336,22 @@ fn main(): void {
                         let scaled_max_z: f32 = bbox_max_z * mesh_sz;
                         
                         // Calculate bounding box center and size (in world space)
-                        let bbox_center_x: f32 = world_x;
-                        let bbox_center_y: f32 = world_y;
-                        let bbox_center_z: f32 = world_z;
+                        // The mesh is drawn with instance_x, instance_y, instance_z as the base position
+                        // and mesh_center_x, mesh_center_y, mesh_center_z as the center offset
+                        // The final world position of the mesh center is: instance_pos + center
+                        // BUT: The mesh drawing function applies transforms in order: T(pos) * T(center) * R * S * T(-center)
+                        // So the actual world position of the center after all transforms is: instance_pos + center
+                        // This is correct, so we use it for the bounding box too
+                        let bbox_center_x: f32 = instance_x + mesh_center_x;
+                        let bbox_center_y: f32 = instance_y + mesh_center_y;
+                        let bbox_center_z: f32 = instance_z + mesh_center_z;
                         let bbox_size_x: f32 = scaled_max_x - scaled_min_x;
                         let bbox_size_y: f32 = scaled_max_y - scaled_min_y;
                         let bbox_size_z: f32 = scaled_max_z - scaled_min_z;
                         
-                        // Draw wireframe bounding box (yellow) - this matches where the corner cubes will be
-                        heidic_draw_cube_wireframe(bbox_center_x, bbox_center_y, bbox_center_z, 0.0, 0.0, 0.0, 
+                        // Draw wireframe bounding box (yellow) with rotation to match mesh
+                        // Apply the same rotation as the mesh
+                        heidic_draw_cube_wireframe(bbox_center_x, bbox_center_y, bbox_center_z, mesh_rx, mesh_ry, mesh_rz, 
                                                     bbox_size_x, bbox_size_y, bbox_size_z, 1.0, 1.0, 0.0);
                     }
                 }
@@ -1195,22 +1368,23 @@ fn main(): void {
         heidic_draw_ray(window, 50000.0, 1.0, 1.0, 0.0);
         
         // Debug: Draw large red cube at ray hit point to visualize where ray intersects geometry
-        // Always calculate and draw, regardless of mode
-        let debug_ray_origin: Vec3 = heidic_get_mouse_ray_origin(window);
-        let debug_ray_dir: Vec3 = heidic_get_mouse_ray_dir(window);
-        let debug_hit_pos: Vec3 = heidic_vec3(0.0, 0.0, 0.0);
-        let debug_found_hit: i32 = 0;
-        let debug_closest_dist: f32 = 100000000000.0;
-        let debug_hit_cube_x: f32 = 0.0;
-        let debug_hit_cube_y: f32 = 0.0;
-        let debug_hit_cube_z: f32 = 0.0;
-        let debug_hit_cube_sx: f32 = 0.0;
-        let debug_hit_cube_sy: f32 = 0.0;
-        let debug_hit_cube_sz: f32 = 0.0;
-        let debug_hit_face: i32 = -1; // -1 = no face, 0=left, 1=right, 2=bottom, 3=top, 4=back, 5=front
-        let debug_is_ground_plane: i32 = 0;
-        
-        // FIRST: Test the big grey ground plane cube (100m x 100m x 1m at y = -500)
+        if 1 == 1 {
+            let debug_ray_origin: Vec3 = heidic_get_mouse_ray_origin(window);
+            let debug_ray_dir: Vec3 = heidic_get_mouse_ray_dir(window);
+            let debug_hit_pos: Vec3 = heidic_vec3(0.0, 0.0, 0.0);
+            let debug_found_hit: i32 = 0;
+            let debug_closest_dist: f32 = 100000000000.0;
+            let debug_hit_cube_x: f32 = 0.0;
+            let debug_hit_cube_y: f32 = 0.0;
+            let debug_hit_cube_z: f32 = 0.0;
+            let debug_hit_cube_sx: f32 = 0.0;
+            let debug_hit_cube_sy: f32 = 0.0;
+            let debug_hit_cube_sz: f32 = 0.0;
+            let debug_hit_face: i32 = -1; // -1 = no face, 0=left, 1=right, 2=bottom, 3=top, 4=back, 5=front
+            let debug_is_ground_plane: i32 = 0;
+            let debug_is_wedge: i32 = 0; // 1 = hit object is a wedge, 0 = cube or other
+            
+            // FIRST: Test the big grey ground plane cube (100m x 100m x 1m at y = -500)
         // This is important geometry and needs to be pickable!
         let ground_cube_x: f32 = 0.0;
         let ground_cube_y: f32 = -500.0;
@@ -1270,18 +1444,83 @@ fn main(): void {
             debug_cube_index = debug_cube_index + 1;
         }
         
+        // Test all created wedges to find closest hit
+        let debug_wedge_index: i32 = 0;
+        let debug_total_wedges: i32 = heidic_get_wedge_total_count();
+        while debug_wedge_index < debug_total_wedges {
+            if heidic_get_wedge_active(debug_wedge_index) == 1 {
+                let debug_wedge_x: f32 = heidic_get_wedge_x(debug_wedge_index);
+                let debug_wedge_y: f32 = heidic_get_wedge_y(debug_wedge_index);
+                let debug_wedge_z: f32 = heidic_get_wedge_z(debug_wedge_index);
+                let debug_wedge_sx: f32 = heidic_get_wedge_sx(debug_wedge_index);
+                let debug_wedge_sy: f32 = heidic_get_wedge_sy(debug_wedge_index);
+                let debug_wedge_sz: f32 = heidic_get_wedge_sz(debug_wedge_index);
+                
+                let debug_wedge_hit: i32 = heidic_raycast_cube_hit(window, debug_wedge_x, debug_wedge_y, debug_wedge_z, debug_wedge_sx, debug_wedge_sy, debug_wedge_sz);
+                if debug_wedge_hit == 1 {
+                    let debug_wedge_hit_point: Vec3 = heidic_raycast_cube_hit_point(window, debug_wedge_x, debug_wedge_y, debug_wedge_z, debug_wedge_sx, debug_wedge_sy, debug_wedge_sz);
+                    let debug_wedge_dist: f32 = (debug_wedge_hit_point.x - debug_ray_origin.x) * (debug_wedge_hit_point.x - debug_ray_origin.x) + (debug_wedge_hit_point.y - debug_ray_origin.y) * (debug_wedge_hit_point.y - debug_ray_origin.y) + (debug_wedge_hit_point.z - debug_ray_origin.z) * (debug_wedge_hit_point.z - debug_ray_origin.z);
+                    if debug_wedge_dist < debug_closest_dist {
+                        debug_closest_dist = debug_wedge_dist;
+                        debug_hit_pos = debug_wedge_hit_point;
+                        debug_hit_cube_x = debug_wedge_x;
+                        debug_hit_cube_y = debug_wedge_y;
+                        debug_hit_cube_z = debug_wedge_z;
+                        debug_hit_cube_sx = debug_wedge_sx;
+                        debug_hit_cube_sy = debug_wedge_sy;
+                        debug_hit_cube_sz = debug_wedge_sz;
+                        debug_is_ground_plane = 0;
+                        debug_is_wedge = 1; // Mark as wedge
+                        debug_found_hit = 1;
+                    }
+                }
+            }
+            debug_wedge_index = debug_wedge_index + 1;
+        }
+        
+        // Test all mesh instances to find closest hit (for debug cube positioning)
+        let debug_mesh_instance_index: i32 = 0;
+        let debug_total_mesh_instances: i32 = heidic_get_mesh_instance_total_count();
+        while debug_mesh_instance_index < debug_total_mesh_instances {
+            if heidic_get_mesh_instance_active(debug_mesh_instance_index) == 1 {
+                let debug_mesh_hit: i32 = heidic_raycast_mesh_bbox_hit(window, debug_mesh_instance_index);
+                if debug_mesh_hit == 1 {
+                    let debug_mesh_hit_point: Vec3 = heidic_raycast_mesh_bbox_hit_point(window, debug_mesh_instance_index);
+                    let debug_mesh_dist: f32 = (debug_mesh_hit_point.x - debug_ray_origin.x) * (debug_mesh_hit_point.x - debug_ray_origin.x) + (debug_mesh_hit_point.y - debug_ray_origin.y) * (debug_mesh_hit_point.y - debug_ray_origin.y) + (debug_mesh_hit_point.z - debug_ray_origin.z) * (debug_mesh_hit_point.z - debug_ray_origin.z);
+                    if debug_mesh_dist < debug_closest_dist {
+                        debug_closest_dist = debug_mesh_dist;
+                        debug_hit_pos = debug_mesh_hit_point;
+                        // For meshes, we don't have cube dimensions, so use a default size
+                        debug_hit_cube_x = debug_mesh_hit_point.x;
+                        debug_hit_cube_y = debug_mesh_hit_point.y;
+                        debug_hit_cube_z = debug_mesh_hit_point.z;
+                        debug_hit_cube_sx = 100.0;
+                        debug_hit_cube_sy = 100.0;
+                        debug_hit_cube_sz = 100.0;
+                        debug_is_ground_plane = 0;
+                        debug_found_hit = 1;
+                    }
+                }
+            }
+            debug_mesh_instance_index = debug_mesh_instance_index + 1;
+        }
+        
+        // Calculate where the cube would actually be placed (not just the hit point)
+        // Declare this early so it can be used in all code paths
+        let debug_placement_pos: Vec3 = debug_hit_pos; // Default: same as hit point
+        let debug_default_cube_size: f32 = 100.0; // Same as cube creation size
+        
         // If still no hit, place debug cube along the ray (5 meters out) so we can always see where the ray is pointing
         if debug_found_hit == 0 {
             debug_hit_pos = heidic_vec3_add(debug_ray_origin, heidic_vec3_mul_scalar(debug_ray_dir, 500.0));
+            debug_placement_pos = debug_hit_pos; // No hit, so placement is same as hit point
+            stored_preview_pos = debug_placement_pos;
+            stored_preview_valid = 1;
         }
         
-        // Always draw red wireframe cube to show where ray is pointing/hitting
-        // Unit square (100 units = 1 meter) for better precision
-        heidic_draw_cube_wireframe(debug_hit_pos.x, debug_hit_pos.y, debug_hit_pos.z, 0.0, 0.0, 0.0, 100.0, 100.0, 100.0, 1.0, 0.0, 0.0);
-        
-        // If we hit a cube, determine which face was hit and highlight it
+        // If we hit a cube or wedge, calculate the actual placement position
         if debug_found_hit == 1 && debug_is_ground_plane == 0 {
-            // Calculate cube bounds
+            // Calculate bounds
             let debug_cube_min_x: f32 = debug_hit_cube_x - debug_hit_cube_sx / 2.0;
             let debug_cube_max_x: f32 = debug_hit_cube_x + debug_hit_cube_sx / 2.0;
             let debug_cube_min_y: f32 = debug_hit_cube_y - debug_hit_cube_sy / 2.0;
@@ -1297,35 +1536,126 @@ fn main(): void {
             let debug_dist_to_back: f32 = debug_hit_pos.z - debug_cube_min_z;
             let debug_dist_to_front: f32 = debug_cube_max_z - debug_hit_pos.z;
             
-            // Find the closest face (smallest distance)
+            // Find the closest face (same logic as placement)
             let debug_min_dist: f32 = debug_dist_to_left;
             debug_hit_face = 0; // 0=left, 1=right, 2=bottom, 3=top, 4=back, 5=front
             
-            if debug_dist_to_right < debug_min_dist {
-                debug_min_dist = debug_dist_to_right;
-                debug_hit_face = 1;
-            }
-            if debug_dist_to_bottom < debug_min_dist {
-                debug_min_dist = debug_dist_to_bottom;
-                debug_hit_face = 2;
-            }
-            if debug_dist_to_top < debug_min_dist {
-                debug_min_dist = debug_dist_to_top;
-                debug_hit_face = 3;
-            }
-            if debug_dist_to_back < debug_min_dist {
-                debug_min_dist = debug_dist_to_back;
-                debug_hit_face = 4;
-            }
-            if debug_dist_to_front < debug_min_dist {
-                debug_min_dist = debug_dist_to_front;
-                debug_hit_face = 5;
+            if debug_is_wedge == 1 {
+                // For wedges, only check back (4) and right (1) faces
+                if debug_dist_to_back < debug_dist_to_right {
+                    debug_min_dist = debug_dist_to_back;
+                    debug_hit_face = 4; // Back face (z = -0.5, the flat front of the wedge)
+                } else {
+                    debug_min_dist = debug_dist_to_right;
+                    debug_hit_face = 1; // Right face (x = 0.5)
+                }
+            } else {
+                // For cubes, check all faces
+                if debug_dist_to_right < debug_min_dist {
+                    debug_min_dist = debug_dist_to_right;
+                    debug_hit_face = 1;
+                }
+                if debug_dist_to_bottom < debug_min_dist {
+                    debug_min_dist = debug_dist_to_bottom;
+                    debug_hit_face = 2;
+                }
+                if debug_dist_to_top < debug_min_dist {
+                    debug_min_dist = debug_dist_to_top;
+                    debug_hit_face = 3;
+                }
+                if debug_dist_to_back < debug_min_dist {
+                    debug_min_dist = debug_dist_to_back;
+                    debug_hit_face = 4;
+                }
+                if debug_dist_to_front < debug_min_dist {
+                    debug_min_dist = debug_dist_to_front;
+                    debug_hit_face = 5;
+                }
             }
             
+            // Calculate placement position based on hit face (same logic as actual placement)
+            if debug_hit_face == 0 {
+                // Left face (negative X) - stack to the left
+                debug_placement_pos.x = debug_cube_min_x - debug_default_cube_size / 2.0;
+                debug_placement_pos.y = debug_hit_cube_y;
+                debug_placement_pos.z = debug_hit_cube_z;
+            } else {
+                if debug_hit_face == 1 {
+                    // Right face (positive X) - stack to the right
+                    debug_placement_pos.x = debug_cube_max_x + debug_default_cube_size / 2.0;
+                    debug_placement_pos.y = debug_hit_cube_y;
+                    debug_placement_pos.z = debug_hit_cube_z;
+                } else {
+                    if debug_hit_face == 2 {
+                        // Bottom face (negative Y) - stack below
+                        debug_placement_pos.x = debug_hit_cube_x;
+                        debug_placement_pos.y = debug_cube_min_y - debug_default_cube_size / 2.0;
+                        debug_placement_pos.z = debug_hit_cube_z;
+                    } else {
+                        if debug_hit_face == 3 {
+                            // Top face (positive Y) - stack on top
+                            debug_placement_pos.x = debug_hit_cube_x;
+                            debug_placement_pos.y = debug_cube_max_y + debug_default_cube_size / 2.0;
+                            debug_placement_pos.z = debug_hit_cube_z;
+                        } else {
+                            if debug_hit_face == 4 {
+                                // Back face (negative Z) - stack to the back
+                                debug_placement_pos.x = debug_hit_cube_x;
+                                debug_placement_pos.y = debug_hit_cube_y;
+                                debug_placement_pos.z = debug_cube_min_z - debug_default_cube_size / 2.0;
+                            } else {
+                                // Front face (positive Z) - stack to the front
+                                debug_placement_pos.x = debug_hit_cube_x;
+                                debug_placement_pos.y = debug_hit_cube_y;
+                                debug_placement_pos.z = debug_cube_max_z + debug_default_cube_size / 2.0;
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            if debug_found_hit == 1 && debug_is_ground_plane == 1 {
+                // Ground plane: stack on top
+                let hit_top_y: f32 = debug_hit_cube_y + debug_hit_cube_sy / 2.0;
+                debug_placement_pos.y = hit_top_y + debug_default_cube_size / 2.0;
+                debug_placement_pos.x = debug_hit_pos.x;
+                debug_placement_pos.z = debug_hit_pos.z;
+            }
+        }
+        
+        // Store the preview position for actual placement to use (update every frame)
+        stored_preview_pos = debug_placement_pos;
+        stored_preview_valid = 1; // Mark as valid
+        
+        // Draw red wireframe cube at the actual placement position (where cube will be placed)
+        // Unit square (100 units = 1 meter) for better precision
+        heidic_draw_cube_wireframe(debug_placement_pos.x, debug_placement_pos.y, debug_placement_pos.z, 0.0, 0.0, 0.0, 100.0, 100.0, 100.0, 1.0, 0.0, 0.0);
+        
+        // If we hit a cube, highlight the face (debug_hit_face was already calculated above)
+        if debug_found_hit == 1 && debug_is_ground_plane == 0 {
+            // Recalculate bounds for highlighting (already calculated above, but need for drawing)
+            let debug_cube_min_x: f32 = debug_hit_cube_x - debug_hit_cube_sx / 2.0;
+            let debug_cube_max_x: f32 = debug_hit_cube_x + debug_hit_cube_sx / 2.0;
+            let debug_cube_min_y: f32 = debug_hit_cube_y - debug_hit_cube_sy / 2.0;
+            let debug_cube_max_y: f32 = debug_hit_cube_y + debug_hit_cube_sy / 2.0;
+            let debug_cube_min_z: f32 = debug_hit_cube_z - debug_hit_cube_sz / 2.0;
+            let debug_cube_max_z: f32 = debug_hit_cube_z + debug_hit_cube_sz / 2.0;
+            
             // Draw highlighted filled face (bright yellow/green)
+            // For wedges, only show green on valid faces (front=5, right=1)
+            // For cubes, show green on all faces
             let highlight_offset: f32 = 1.0; // Small offset to avoid z-fighting
             let grid_density: f32 = 10.0; // Number of grid lines per face dimension
-            if debug_hit_face == 0 {
+            let show_highlight: i32 = 1; // Default: show highlight
+            if debug_is_wedge == 1 {
+                // Only show highlight for back (4, which is the wedge's front at z=-0.5) or right (1) faces on wedges
+                if debug_hit_face != 1 && debug_hit_face != 4 {
+                    show_highlight = 0; // Don't show highlight for invalid wedge faces
+                }
+            }
+            
+            if show_highlight == 1 {
+                if debug_hit_face == 0 {
                 // Left face (negative X) - draw filled rectangle on left face
                 let y1: f32 = debug_cube_min_y;
                 let y2: f32 = debug_cube_max_y;
@@ -1510,6 +1840,8 @@ fn main(): void {
                     }
                 }
             }
+            } // End of show_highlight check
+        }
         }
         
         // Mouse mode toggle: Left-click enables mouse (cursor visible, picking on), Right-click disables (cursor hidden, dolly/look on)
@@ -1582,14 +1914,7 @@ fn main(): void {
                                                      current_scale);
             let scale_interacting: i32 = heidic_gizmo_scale_is_interacting();
             
-            // Check if rotation gizmo would be clicked
-            let current_rx: f32 = heidic_get_mesh_instance_rx(selected_mesh_instance_id);
-            let current_ry: f32 = heidic_get_mesh_instance_ry(selected_mesh_instance_id);
-            let current_rz: f32 = heidic_get_mesh_instance_rz(selected_mesh_instance_id);
-            let temp_rot: Vec3 = heidic_gizmo_rotate(window, gizmo_x, gizmo_y, gizmo_z, current_rx, current_ry, current_rz);
-            let rotate_interacting: i32 = heidic_gizmo_rotate_is_interacting();
-            
-            if translate_interacting == 1 || scale_interacting == 1 || rotate_interacting == 1 {
+            if translate_interacting == 1 || scale_interacting == 1 {
                 gizmo_clicked = 1;
             }
         }
@@ -1736,6 +2061,11 @@ fn main(): void {
         
         // Show mesh selection and Gizmo
         if has_mesh_selection == 1 && selected_mesh_instance_id >= 0 {
+            // Refresh cached position values from instance (in case they were updated via input fields)
+            selected_mesh_x = heidic_get_mesh_instance_x(selected_mesh_instance_id);
+            selected_mesh_y = heidic_get_mesh_instance_y(selected_mesh_instance_id);
+            selected_mesh_z = heidic_get_mesh_instance_z(selected_mesh_instance_id);
+            
             // Get mesh center and bounding box for gizmo positioning
             let mesh_center_x: f32 = heidic_get_mesh_instance_center_x(selected_mesh_instance_id);
             let mesh_center_y: f32 = heidic_get_mesh_instance_center_y(selected_mesh_instance_id);
@@ -1772,24 +2102,8 @@ fn main(): void {
                 heidic_set_mesh_instance_scale(selected_mesh_instance_id, new_scale, new_scale, new_scale);
             }
             
-            // Get current rotation
-            let current_rx: f32 = heidic_get_mesh_instance_rx(selected_mesh_instance_id);
-            let current_ry: f32 = heidic_get_mesh_instance_ry(selected_mesh_instance_id);
-            let current_rz: f32 = heidic_get_mesh_instance_rz(selected_mesh_instance_id);
-            
-            // Check if rotation gizmo is being used
-            let rotate_interacting: i32 = heidic_gizmo_rotate_is_interacting();
-            
-            // Rotation gizmo: Rotate selected mesh
-            let new_rotation: Vec3 = heidic_gizmo_rotate(window, gizmo_x, gizmo_y, gizmo_z, current_rx, current_ry, current_rz);
-            
-            // Update rotation if it changed
-            if new_rotation.x != current_rx || new_rotation.y != current_ry || new_rotation.z != current_rz {
-                heidic_set_mesh_instance_rotation(selected_mesh_instance_id, new_rotation.x, new_rotation.y, new_rotation.z);
-            }
-            
-            // Translation gizmo: Only update if scale and rotation gizmos are not active
-            if scale_interacting == 0 && rotate_interacting == 0 {
+            // Translation gizmo: Only update if scale gizmo is not active
+            if scale_interacting == 0 {
                 // Translation gizmo: Move selected mesh (positioned at mesh center)
                 let new_gizmo_pos: Vec3 = heidic_gizmo_translate(window, gizmo_x, gizmo_y, gizmo_z);
                 
@@ -2008,14 +2322,70 @@ fn main(): void {
                 heidic_imgui_end();
             }
             
-            // Rotation Control Window
+            // Transform Control Window
             if has_mesh_selection == 1 && selected_mesh_instance_id >= 0 {
-                if heidic_imgui_begin("Rotation Control") == 1 {
-                    // Get current rotation
+                if heidic_imgui_begin("Transform Control") == 1 {
+                    // Get current transform values
+                    let current_x: f32 = heidic_get_mesh_instance_x(selected_mesh_instance_id);
+                    let current_y: f32 = heidic_get_mesh_instance_y(selected_mesh_instance_id);
+                    let current_z: f32 = heidic_get_mesh_instance_z(selected_mesh_instance_id);
+                    let current_sx: f32 = heidic_get_mesh_instance_sx(selected_mesh_instance_id);
+                    let current_sy: f32 = heidic_get_mesh_instance_sy(selected_mesh_instance_id);
+                    let current_sz: f32 = heidic_get_mesh_instance_sz(selected_mesh_instance_id);
                     let current_rx: f32 = heidic_get_mesh_instance_rx(selected_mesh_instance_id);
                     let current_ry: f32 = heidic_get_mesh_instance_ry(selected_mesh_instance_id);
                     let current_rz: f32 = heidic_get_mesh_instance_rz(selected_mesh_instance_id);
                     
+                    // Translation Inputs
+                    heidic_imgui_text("Translation:");
+                    heidic_imgui_text("X:");
+                    heidic_imgui_same_line();
+                    let new_x: f32 = heidic_imgui_input_float("##TransX", current_x, 1.0, 10.0);
+                    heidic_imgui_text("Y:");
+                    heidic_imgui_same_line();
+                    let new_y: f32 = heidic_imgui_input_float("##TransY", current_y, 1.0, 10.0);
+                    heidic_imgui_text("Z:");
+                    heidic_imgui_same_line();
+                    let new_z: f32 = heidic_imgui_input_float("##TransZ", current_z, 1.0, 10.0);
+                    if new_x != current_x || new_y != current_y || new_z != current_z {
+                        heidic_set_mesh_instance_pos(selected_mesh_instance_id, new_x, new_y, new_z);
+                        // Update cached position values so gizmo updates immediately
+                        selected_mesh_x = new_x;
+                        selected_mesh_y = new_y;
+                        selected_mesh_z = new_z;
+                    }
+                    
+                    heidic_imgui_separator();
+                    
+                    // Scale Inputs
+                    heidic_imgui_text("Scale:");
+                    heidic_imgui_text("X:");
+                    heidic_imgui_same_line();
+                    let new_sx: f32 = heidic_imgui_input_float("##ScaleX", current_sx, 0.1, 1.0);
+                    heidic_imgui_text("Y:");
+                    heidic_imgui_same_line();
+                    let new_sy: f32 = heidic_imgui_input_float("##ScaleY", current_sy, 0.1, 1.0);
+                    heidic_imgui_text("Z:");
+                    heidic_imgui_same_line();
+                    let new_sz: f32 = heidic_imgui_input_float("##ScaleZ", current_sz, 0.1, 1.0);
+                    // Clamp scale to positive values
+                    if new_sx < 0.01 {
+                        new_sx = 0.01;
+                    }
+                    if new_sy < 0.01 {
+                        new_sy = 0.01;
+                    }
+                    if new_sz < 0.01 {
+                        new_sz = 0.01;
+                    }
+                    if new_sx != current_sx || new_sy != current_sy || new_sz != current_sz {
+                        heidic_set_mesh_instance_scale(selected_mesh_instance_id, new_sx, new_sy, new_sz);
+                    }
+                    
+                    heidic_imgui_separator();
+                    
+                    // Rotation - Slider and Input (both work independently)
+                    heidic_imgui_text("Rotation:");
                     // X Rotation - Slider and Input (both work independently)
                     let new_rx_slider: f32 = heidic_imgui_slider_float("Rotation X", current_rx, 0.0, 360.0);
                     let new_rx_input: f32 = heidic_imgui_input_float("##RX", current_rx, 1.0, 10.0);
@@ -2074,6 +2444,130 @@ fn main(): void {
                     }
                     
                     heidic_imgui_end();
+                }
+            }
+            
+            // Transform Control Window for Selected Cube
+            if has_selection == 1 && selected_cube_index >= 2.0 {
+                let cube_storage_index: i32 = heidic_float_to_int(selected_cube_index - 2.0);
+                if heidic_get_cube_active(cube_storage_index) == 1 {
+                    if heidic_imgui_begin("Transform Control") == 1 {
+                        // Get current transform values
+                        let current_x: f32 = heidic_get_cube_x(cube_storage_index);
+                        let current_y: f32 = heidic_get_cube_y(cube_storage_index);
+                        let current_z: f32 = heidic_get_cube_z(cube_storage_index);
+                        let current_sx: f32 = heidic_get_cube_sx(cube_storage_index);
+                        let current_sy: f32 = heidic_get_cube_sy(cube_storage_index);
+                        let current_sz: f32 = heidic_get_cube_sz(cube_storage_index);
+                        let current_rx: f32 = heidic_get_cube_rx(cube_storage_index);
+                        let current_ry: f32 = heidic_get_cube_ry(cube_storage_index);
+                        let current_rz: f32 = heidic_get_cube_rz(cube_storage_index);
+                        
+                        // Translation Inputs
+                        heidic_imgui_text("Translation:");
+                        heidic_imgui_text("X:");
+                        heidic_imgui_same_line();
+                        let new_x: f32 = heidic_imgui_input_float("##CubeTransX", current_x, 1.0, 10.0);
+                        heidic_imgui_text("Y:");
+                        heidic_imgui_same_line();
+                        let new_y: f32 = heidic_imgui_input_float("##CubeTransY", current_y, 1.0, 10.0);
+                        heidic_imgui_text("Z:");
+                        heidic_imgui_same_line();
+                        let new_z: f32 = heidic_imgui_input_float("##CubeTransZ", current_z, 1.0, 10.0);
+                        if new_x != current_x || new_y != current_y || new_z != current_z {
+                            heidic_set_cube_pos(cube_storage_index, new_x, new_y, new_z);
+                        }
+                        
+                        heidic_imgui_separator();
+                        
+                        // Scale Inputs
+                        heidic_imgui_text("Scale:");
+                        heidic_imgui_text("X:");
+                        heidic_imgui_same_line();
+                        let new_sx: f32 = heidic_imgui_input_float("##CubeScaleX", current_sx, 0.1, 1.0);
+                        heidic_imgui_text("Y:");
+                        heidic_imgui_same_line();
+                        let new_sy: f32 = heidic_imgui_input_float("##CubeScaleY", current_sy, 0.1, 1.0);
+                        heidic_imgui_text("Z:");
+                        heidic_imgui_same_line();
+                        let new_sz: f32 = heidic_imgui_input_float("##CubeScaleZ", current_sz, 0.1, 1.0);
+                        // Clamp scale to positive values
+                        if new_sx < 0.01 {
+                            new_sx = 0.01;
+                        }
+                        if new_sy < 0.01 {
+                            new_sy = 0.01;
+                        }
+                        if new_sz < 0.01 {
+                            new_sz = 0.01;
+                        }
+                        if new_sx != current_sx || new_sy != current_sy || new_sz != current_sz {
+                            heidic_set_cube_scale(cube_storage_index, new_sx, new_sy, new_sz);
+                        }
+                        
+                        heidic_imgui_separator();
+                        
+                        // Rotation - Slider and Input (both work independently)
+                        heidic_imgui_text("Rotation:");
+                        // X Rotation - Slider and Input (both work independently)
+                        let new_rx_slider: f32 = heidic_imgui_slider_float("Rotation X", current_rx, 0.0, 360.0);
+                        let new_rx_input: f32 = heidic_imgui_input_float("##CubeRX", current_rx, 1.0, 10.0);
+                        // Use input value if it changed, otherwise use slider value
+                        let new_rx: f32 = new_rx_slider;
+                        if new_rx_input != current_rx {
+                            new_rx = new_rx_input;
+                        }
+                        if new_rx != current_rx {
+                            // Clamp to 0-360 range
+                            if new_rx < 0.0 {
+                                new_rx = 0.0;
+                            }
+                            if new_rx > 360.0 {
+                                new_rx = 360.0;
+                            }
+                            heidic_set_cube_rotation(cube_storage_index, new_rx, current_ry, current_rz);
+                        }
+                        
+                        // Y Rotation - Slider and Input (both work independently)
+                        let new_ry_slider: f32 = heidic_imgui_slider_float("Rotation Y", current_ry, 0.0, 360.0);
+                        let new_ry_input: f32 = heidic_imgui_input_float("##CubeRY", current_ry, 1.0, 10.0);
+                        // Use input value if it changed, otherwise use slider value
+                        let new_ry: f32 = new_ry_slider;
+                        if new_ry_input != current_ry {
+                            new_ry = new_ry_input;
+                        }
+                        if new_ry != current_ry {
+                            // Clamp to 0-360 range
+                            if new_ry < 0.0 {
+                                new_ry = 0.0;
+                            }
+                            if new_ry > 360.0 {
+                                new_ry = 360.0;
+                            }
+                            heidic_set_cube_rotation(cube_storage_index, current_rx, new_ry, current_rz);
+                        }
+                        
+                        // Z Rotation - Slider and Input (both work independently)
+                        let new_rz_slider: f32 = heidic_imgui_slider_float("Rotation Z", current_rz, 0.0, 360.0);
+                        let new_rz_input: f32 = heidic_imgui_input_float("##CubeRZ", current_rz, 1.0, 10.0);
+                        // Use input value if it changed, otherwise use slider value
+                        let new_rz: f32 = new_rz_slider;
+                        if new_rz_input != current_rz {
+                            new_rz = new_rz_input;
+                        }
+                        if new_rz != current_rz {
+                            // Clamp to 0-360 range
+                            if new_rz < 0.0 {
+                                new_rz = 0.0;
+                            }
+                            if new_rz > 360.0 {
+                                new_rz = 360.0;
+                            }
+                            heidic_set_cube_rotation(cube_storage_index, current_rx, current_ry, new_rz);
+                        }
+                        
+                        heidic_imgui_end();
+                    }
                 }
             }
             
