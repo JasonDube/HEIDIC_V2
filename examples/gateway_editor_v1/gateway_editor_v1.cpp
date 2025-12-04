@@ -1403,14 +1403,33 @@ int heidic_main() {
                         if ((block_index >= 0)) {
                             std::cout << block_index << std::endl;
                             std::cout << "\n" << std::endl;
-                            has_selection = 1;
-                            selected_cube_index = (heidic_int_to_float(block_index) + 2);
-                            selected_cube_x = create_pos.x;
-                            selected_cube_y = create_pos.y;
-                            selected_cube_z = create_pos.z;
-                            selected_cube_sx = default_cube_size;
-                            selected_cube_sy = default_cube_size;
-                            selected_cube_sz = default_cube_size;
+                            if ((build_mode == 0)) {
+                                has_selection = 1;
+                                selected_cube_index = (heidic_int_to_float(block_index) + 2);
+                                selected_cube_x = create_pos.x;
+                                selected_cube_y = create_pos.y;
+                                selected_cube_z = create_pos.z;
+                                selected_cube_sx = default_cube_size;
+                                selected_cube_sy = default_cube_size;
+                                selected_cube_sz = default_cube_size;
+                                has_wedge_selection = 0;
+                                selected_wedge_index = -1;
+                                has_mesh_selection = 0;
+                                selected_mesh_instance_id = -1;
+                            } else {
+                                has_wedge_selection = 1;
+                                selected_wedge_index = block_index;
+                                selected_wedge_x = create_pos.x;
+                                selected_wedge_y = create_pos.y;
+                                selected_wedge_z = create_pos.z;
+                                selected_wedge_sx = default_cube_size;
+                                selected_wedge_sy = default_cube_size;
+                                selected_wedge_sz = default_cube_size;
+                                has_selection = 0;
+                                selected_cube_index = -1;
+                                has_mesh_selection = 0;
+                                selected_mesh_instance_id = -1;
+                            }
                         } else {
                             if ((build_mode == 0)) {
                                 std::cout << "Failed to create cube\n" << std::endl;
@@ -2159,127 +2178,6 @@ int heidic_main() {
                         }
                         last_wedge_preview_rotation = wedge_preview_rotation;
                         heidic_draw_wedge_wireframe(debug_placement_pos.x, debug_placement_pos.y, debug_placement_pos.z, wedge_rot_x, wedge_rot_y, wedge_rot_z, 100, 100, 100, 1, 0, 0);
-                    }
-                    if (((debug_found_hit == 1) && (debug_is_ground_plane == 0))) {
-                        float  debug_cube_min_x = (debug_hit_cube_x - (debug_hit_cube_sx / 2));
-                        float  debug_cube_max_x = (debug_hit_cube_x + (debug_hit_cube_sx / 2));
-                        float  debug_cube_min_y = (debug_hit_cube_y - (debug_hit_cube_sy / 2));
-                        float  debug_cube_max_y = (debug_hit_cube_y + (debug_hit_cube_sy / 2));
-                        float  debug_cube_min_z = (debug_hit_cube_z - (debug_hit_cube_sz / 2));
-                        float  debug_cube_max_z = (debug_hit_cube_z + (debug_hit_cube_sz / 2));
-                        float  highlight_offset = 1;
-                        float  grid_density = 10;
-                        float  y1 = debug_cube_min_y;
-                        float  y2 = debug_cube_max_y;
-                        float  z1 = debug_cube_min_z;
-                        float  z2 = debug_cube_max_z;
-                        float  x_left = (debug_cube_min_x - highlight_offset);
-                        heidic_draw_line(x_left, y1, z1, x_left, y2, z1, 0, 1, 0);
-                        heidic_draw_line(x_left, y2, z1, x_left, y2, z2, 0, 1, 0);
-                        heidic_draw_line(x_left, y2, z2, x_left, y1, z2, 0, 1, 0);
-                        heidic_draw_line(x_left, y1, z2, x_left, y1, z1, 0, 1, 0);
-                        float  grid_step_y = ((y2 - y1) / grid_density);
-                        int32_t  grid_i = 0;
-                        while ((grid_i <= heidic_float_to_int(grid_density))) {
-                            float  grid_y = (y1 + (heidic_int_to_float(grid_i) * grid_step_y));
-                            heidic_draw_line(x_left, grid_y, z1, x_left, grid_y, z2, 0, 1, 0);
-                            grid_i = (grid_i + 1);
-                        }
-                        float  grid_step_z = ((z2 - z1) / grid_density);
-                        grid_i = 0;
-                        while ((grid_i <= heidic_float_to_int(grid_density))) {
-                            float  grid_z = (z1 + (heidic_int_to_float(grid_i) * grid_step_z));
-                            heidic_draw_line(x_left, y1, grid_z, x_left, y2, grid_z, 0, 1, 0);
-                            grid_i = (grid_i + 1);
-                        }
-                        float  x_right = (debug_cube_max_x + highlight_offset);
-                        heidic_draw_line(x_right, y1, z1, x_right, y2, z1, 0, 1, 0);
-                        heidic_draw_line(x_right, y2, z1, x_right, y2, z2, 0, 1, 0);
-                        heidic_draw_line(x_right, y2, z2, x_right, y1, z2, 0, 1, 0);
-                        heidic_draw_line(x_right, y1, z2, x_right, y1, z1, 0, 1, 0);
-                        grid_i = 0;
-                        while ((grid_i <= heidic_float_to_int(grid_density))) {
-                            float  grid_y = (y1 + (heidic_int_to_float(grid_i) * grid_step_y));
-                            heidic_draw_line(x_right, grid_y, z1, x_right, grid_y, z2, 0, 1, 0);
-                            grid_i = (grid_i + 1);
-                        }
-                        grid_i = 0;
-                        while ((grid_i <= heidic_float_to_int(grid_density))) {
-                            float  grid_z = (z1 + (heidic_int_to_float(grid_i) * grid_step_z));
-                            heidic_draw_line(x_right, y1, grid_z, x_right, y2, grid_z, 0, 1, 0);
-                            grid_i = (grid_i + 1);
-                        }
-                        float  x1 = debug_cube_min_x;
-                        float  x2 = debug_cube_max_x;
-                        float  y_bottom = (debug_cube_min_y - highlight_offset);
-                        heidic_draw_line(x1, y_bottom, z1, x2, y_bottom, z1, 0, 1, 0);
-                        heidic_draw_line(x2, y_bottom, z1, x2, y_bottom, z2, 0, 1, 0);
-                        heidic_draw_line(x2, y_bottom, z2, x1, y_bottom, z2, 0, 1, 0);
-                        heidic_draw_line(x1, y_bottom, z2, x1, y_bottom, z1, 0, 1, 0);
-                        float  grid_step_x = ((x2 - x1) / grid_density);
-                        grid_i = 0;
-                        while ((grid_i <= heidic_float_to_int(grid_density))) {
-                            float  grid_x = (x1 + (heidic_int_to_float(grid_i) * grid_step_x));
-                            heidic_draw_line(grid_x, y_bottom, z1, grid_x, y_bottom, z2, 0, 1, 0);
-                            grid_i = (grid_i + 1);
-                        }
-                        grid_i = 0;
-                        while ((grid_i <= heidic_float_to_int(grid_density))) {
-                            float  grid_z = (z1 + (heidic_int_to_float(grid_i) * grid_step_z));
-                            heidic_draw_line(x1, y_bottom, grid_z, x2, y_bottom, grid_z, 0, 1, 0);
-                            grid_i = (grid_i + 1);
-                        }
-                        float  y_top = (debug_cube_max_y + highlight_offset);
-                        heidic_draw_line(x1, y_top, z1, x2, y_top, z1, 0, 1, 0);
-                        heidic_draw_line(x2, y_top, z1, x2, y_top, z2, 0, 1, 0);
-                        heidic_draw_line(x2, y_top, z2, x1, y_top, z2, 0, 1, 0);
-                        heidic_draw_line(x1, y_top, z2, x1, y_top, z1, 0, 1, 0);
-                        grid_i = 0;
-                        while ((grid_i <= heidic_float_to_int(grid_density))) {
-                            float  grid_x = (x1 + (heidic_int_to_float(grid_i) * grid_step_x));
-                            heidic_draw_line(grid_x, y_top, z1, grid_x, y_top, z2, 0, 1, 0);
-                            grid_i = (grid_i + 1);
-                        }
-                        grid_i = 0;
-                        while ((grid_i <= heidic_float_to_int(grid_density))) {
-                            float  grid_z = (z1 + (heidic_int_to_float(grid_i) * grid_step_z));
-                            heidic_draw_line(x1, y_top, grid_z, x2, y_top, grid_z, 0, 1, 0);
-                            grid_i = (grid_i + 1);
-                        }
-                        float  z_back = (debug_cube_min_z - highlight_offset);
-                        heidic_draw_line(x1, y1, z_back, x2, y1, z_back, 0, 1, 0);
-                        heidic_draw_line(x2, y1, z_back, x2, y2, z_back, 0, 1, 0);
-                        heidic_draw_line(x2, y2, z_back, x1, y2, z_back, 0, 1, 0);
-                        heidic_draw_line(x1, y2, z_back, x1, y1, z_back, 0, 1, 0);
-                        grid_i = 0;
-                        while ((grid_i <= heidic_float_to_int(grid_density))) {
-                            float  grid_x = (x1 + (heidic_int_to_float(grid_i) * grid_step_x));
-                            heidic_draw_line(grid_x, y1, z_back, grid_x, y2, z_back, 0, 1, 0);
-                            grid_i = (grid_i + 1);
-                        }
-                        grid_i = 0;
-                        while ((grid_i <= heidic_float_to_int(grid_density))) {
-                            float  grid_y = (y1 + (heidic_int_to_float(grid_i) * grid_step_y));
-                            heidic_draw_line(x1, grid_y, z_back, x2, grid_y, z_back, 0, 1, 0);
-                            grid_i = (grid_i + 1);
-                        }
-                        float  z_front = (debug_cube_max_z + highlight_offset);
-                        heidic_draw_line(x1, y1, z_front, x2, y1, z_front, 0, 1, 0);
-                        heidic_draw_line(x2, y1, z_front, x2, y2, z_front, 0, 1, 0);
-                        heidic_draw_line(x2, y2, z_front, x1, y2, z_front, 0, 1, 0);
-                        heidic_draw_line(x1, y2, z_front, x1, y1, z_front, 0, 1, 0);
-                        grid_i = 0;
-                        while ((grid_i <= heidic_float_to_int(grid_density))) {
-                            float  grid_x = (x1 + (heidic_int_to_float(grid_i) * grid_step_x));
-                            heidic_draw_line(grid_x, y1, z_front, grid_x, y2, z_front, 0, 1, 0);
-                            grid_i = (grid_i + 1);
-                        }
-                        grid_i = 0;
-                        while ((grid_i <= heidic_float_to_int(grid_density))) {
-                            float  grid_y = (y1 + (heidic_int_to_float(grid_i) * grid_step_y));
-                            heidic_draw_line(x1, grid_y, z_front, x2, grid_y, z_front, 0, 1, 0);
-                            grid_i = (grid_i + 1);
-                        }
                     }
                 }
                 int32_t  mouse_left_pressed = heidic_is_mouse_button_pressed(window, 0);
