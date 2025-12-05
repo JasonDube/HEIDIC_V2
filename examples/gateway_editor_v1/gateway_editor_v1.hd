@@ -68,23 +68,19 @@ fn main(): void {
     let show_debug: i32 = 1;
     let f1_was_pressed: i32 = 0;
     
-    // Camera Mode: 0 = Top-Down, 1 = FPS
-    let camera_mode: i32 = 1; // Start in Walk mode (FPS)
-    let tab_was_pressed: i32 = 0;  // Tab key for camera toggle
+    // Player cube visibility: Always invisible in FPS mode
+    let player_cube_visible: i32 = INVISIBLE;
     
-    // Player cube visibility: INVISIBLE in walk mode, VISIBLE in top-down mode
-    let player_cube_visible: i32 = VISIBLE;
-    
-    // Mouse mode: 0 = disabled (cursor captured, mouse look/dolly enabled), 1 = enabled (cursor visible, picking enabled)
-    let mouse_mode: i32 = 1; // Start with mouse enabled (visible cursor) for top-down mode
+    // Mouse mode: 0 = build mode (cursor captured, crosshair visible, right-click to place blocks), 1 = selection mode (cursor visible, left-click to select/interact)
+    let mouse_mode: i32 = 0; // Start in build mode (mouse mode 0)
     let mouse_mode_left_was_pressed: i32 = 0;
     let mouse_mode_right_was_pressed: i32 = 0;
     
-    // Set cursor mode based on initial mouse mode
-    heidic_set_cursor_mode(window, 0); // 0 = normal (visible) for top-down mode
+    // Set cursor mode based on initial mouse mode (build mode = captured)
+    heidic_set_cursor_mode(window, 2); // 2 = disabled (captured) for FPS mode in build mode
     
     // Grid visibility toggle
-    let show_grid: i32 = 1; // Start with grid visible
+    let show_grid: i32 = 0; // Start with grid hidden
     let g_was_pressed: i32 = 0;
     
     // Video Mode: 0 = fullscreen, 1 = windowed
@@ -162,19 +158,11 @@ fn main(): void {
     // Level name buffer for input (managed by C++ side)
     // We'll use heidic_get_level_name() to get the current name
     
-    // Top-down camera position (high up, looking down)
-    let topdown_cam_height: f32 = 10000.0; // 100 meters up (zoom level)
-    let topdown_cam_pan_x: f32 = 0.0; // Pan offset X
-    let topdown_cam_pan_z: f32 = 0.0; // Pan offset Z
-    let topdown_cam_pos: Vec3 = heidic_vec3(0.0, topdown_cam_height, 0.0); // 100 meters up
-    let topdown_cam_rot: Vec3 = heidic_vec3(-90.0, 0.0, 0.0); // Looking straight down
-    
-    // Dolly orbit state (for orbiting around selected object)
+    // Dolly orbit state (for orbiting around selected object) - deprecated
     let dolly_orbit_azimuth: f32 = 0.0; // Horizontal angle around target
     let dolly_orbit_elevation: f32 = 45.0; // Vertical angle (0 = horizontal, 90 = straight up)
     let dolly_orbit_distance: f32 = 2000.0; // Distance from target (reduced from 5000 to 20 meters)
-    let in_orbit_mode: i32 = 0; // Flag to prevent pan from overwriting orbit position
-    let alt_was_pressed: i32 = 0; // Track Alt key state to detect when dolly starts
+    let in_orbit_mode: i32 = 0; // Flag to prevent pan from overwriting orbit position (deprecated - Alt+dolly removed)
     
     // Reference Cube 1 removed - all cubes are now created dynamically
     
@@ -200,9 +188,18 @@ fn main(): void {
         let mouse_x: f32 = heidic_get_mouse_x(window);
         let mouse_y: f32 = heidic_get_mouse_y(window);
         
-        // Get mouse ray
-        let ray_origin: Vec3 = heidic_get_mouse_ray_origin(window);
-        let ray_dir: Vec3 = heidic_get_mouse_ray_dir(window);
+        // Get ray from center of screen (for crosshair targeting) or mouse position (for selection)
+        let ray_origin: Vec3 = heidic_vec3(0.0, 0.0, 0.0);
+        let ray_dir: Vec3 = heidic_vec3(0.0, 0.0, 1.0);
+        if mouse_mode == 0 {
+            // Build mode: use center of screen for raycast
+            ray_origin = heidic_get_center_ray_origin(window);
+            ray_dir = heidic_get_center_ray_dir(window);
+        } else {
+            // Selection mode: use mouse position for raycast
+            ray_origin = heidic_get_mouse_ray_origin(window);
+            ray_dir = heidic_get_mouse_ray_dir(window);
+        }
         
         // ESC always works (to close window)
         if heidic_is_key_pressed(window, 256) == 1 { // ESC
@@ -214,18 +211,7 @@ fn main(): void {
             }
         }
         
-        // Alt + Mouse Drag for Camera Dolly (works in both modes)
-        // Left Alt = 342, Right Alt = 346
-        // Define alt_pressed outside block_input check so it's available everywhere
-        let left_alt_pressed: i32 = heidic_is_key_pressed(window, 342);
-        let right_alt_pressed: i32 = heidic_is_key_pressed(window, 346);
-        let alt_pressed: i32 = 0;
-        if left_alt_pressed == 1 {
-            alt_pressed = 1;
-        }
-        if right_alt_pressed == 1 {
-            alt_pressed = 1;
-        }
+        // Alt + Mouse Drag dolly functionality has been removed/deprecated
         
         // Skip all other input if we're editing
         if block_input == 0 {
@@ -247,222 +233,9 @@ fn main(): void {
         
         // Component Mode Toggle (Key '1' = component mode, Key '2' = object mode)
         // Key code 49 = '1', 50 = '2'
-        // Tab Key Toggle Logic (258 is Tab) - Switch between Top-Down and FPS camera
-        let tab_is_pressed: i32 = heidic_is_key_pressed(window, 258);
-        if tab_is_pressed == 1 {
-            if tab_was_pressed == 0 {
-                if camera_mode == 0 {
-                    camera_mode = 1; // Switch to FPS
-                    // Set cursor mode based on mouse_mode
-                    if mouse_mode == 0 {
-                        heidic_set_cursor_mode(window, 2); // 2 = disabled (captured)
-                    } else {
-                        heidic_set_cursor_mode(window, 0); // 0 = normal (visible)
-                    }
-                } else {
-                    camera_mode = 0; // Switch to Top-Down
-                    // Set cursor mode based on mouse_mode
-                    if mouse_mode == 0 {
-                        heidic_set_cursor_mode(window, 1); // 1 = hidden
-                    } else {
-                        heidic_set_cursor_mode(window, 0); // 0 = normal (visible)
-                    }
-                }
-                tab_was_pressed = 1;
-            }
-        } else {
-            tab_was_pressed = 0;
-        }
         
-        // Only allow dolly/look when mouse_mode is disabled
-        if alt_pressed == 1 && mouse_mode == 0 {
-            // Dolly orbit around selected object (if there's a selection)
-            if has_selection == 1 {
-                // Initialize orbit angles from current camera position when Alt is first pressed
-                if alt_was_pressed == 0 {
-                    // Calculate current camera position relative to target
-                    let target_pos: Vec3 = heidic_vec3(selected_cube_x, selected_cube_y, selected_cube_z);
-                    let current_cam_pos: Vec3 = camera_pos;
-                    let to_camera: Vec3 = heidic_vec3_sub(current_cam_pos, target_pos);
-                    let dist: f32 = heidic_vec3_distance(current_cam_pos, target_pos);
-                    
-                    if dist > 0.001 {
-                        // Normalize direction vector
-                        let dir_x: f32 = to_camera.x / dist;
-                        let dir_y: f32 = to_camera.y / dist;
-                        let dir_z: f32 = to_camera.z / dist;
-                        
-                        // Calculate azimuth from XZ components (horizontal angle)
-                        let azimuth_rad: f32 = heidic_atan2(dir_x, dir_z);
-                        dolly_orbit_azimuth = heidic_convert_radians_to_degrees(azimuth_rad);
-                        
-                        // Calculate elevation from Y component (vertical angle)
-                        let elevation_rad: f32 = heidic_asin(dir_y);
-                        dolly_orbit_elevation = heidic_convert_radians_to_degrees(elevation_rad);
-                        
-                        // Update distance to match current camera distance
-                        if dist > 10.0 && dist < 100000.0 {
-                            dolly_orbit_distance = dist;
-                        }
-                    }
-                }
-                
-                // Get mouse delta for orbit movement
-                let dolly_delta_x: f32 = heidic_get_mouse_delta_x(window);
-                let dolly_delta_y: f32 = heidic_get_mouse_delta_y(window);
-                
-                // Orbit sensitivity (degrees per pixel) - LearnOpenGL style
-                let orbit_sensitivity: f32 = 0.3; // Reduced for smoother feel
-                
-                // Update orbit angles (Track/Orbit)
-                dolly_orbit_azimuth = dolly_orbit_azimuth - dolly_delta_x * orbit_sensitivity; // Horizontal rotation (yaw)
-                dolly_orbit_elevation = dolly_orbit_elevation + dolly_delta_y * orbit_sensitivity; // Vertical rotation (pitch)
-                
-                // Clamp elevation to prevent gimbal lock (LearnOpenGL standard)
-                if dolly_orbit_elevation > 89.0 {
-                    dolly_orbit_elevation = 89.0;
-                }
-                if dolly_orbit_elevation < -89.0 {
-                    dolly_orbit_elevation = -89.0;
-                }
-                
-                // Target position (selected object)
-                let target_pos: Vec3 = heidic_vec3(selected_cube_x, selected_cube_y, selected_cube_z);
-                
-                // Calculate camera position using spherical coordinates (Y-up system)
-                // Standard spherical coordinates for orbit camera:
-                // - Azimuth: rotation around Y axis (horizontal)
-                // - Elevation: angle from horizontal plane (vertical, -90 to +90)
-                let azimuth_rad: f32 = heidic_convert_degrees_to_radians(dolly_orbit_azimuth);
-                let elevation_rad: f32 = heidic_convert_degrees_to_radians(dolly_orbit_elevation);
-                
-                // Spherical to Cartesian conversion (Y-up, right-handed)
-                // When elevation = 0: camera is at same Y as target (horizontal)
-                // When elevation = 90: camera is directly above target
-                // When elevation = -90: camera is directly below target
-                // X = distance * cos(elevation) * sin(azimuth)
-                // Y = distance * sin(elevation)  [This allows negative Y when elevation < 0]
-                // Z = distance * cos(elevation) * cos(azimuth)
-                let cos_elev: f32 = heidic_cos(elevation_rad);
-                let sin_elev: f32 = heidic_sin(elevation_rad);
-                let cos_azim: f32 = heidic_cos(azimuth_rad);
-                let sin_azim: f32 = heidic_sin(azimuth_rad);
-                
-                let offset_x: f32 = dolly_orbit_distance * cos_elev * sin_azim;
-                let offset_y: f32 = dolly_orbit_distance * sin_elev;  // Can be negative!
-                let offset_z: f32 = dolly_orbit_distance * cos_elev * cos_azim;
-                
-                let offset: Vec3 = heidic_vec3(offset_x, offset_y, offset_z);
-                let new_cam_pos: Vec3 = heidic_vec3_add(target_pos, offset);
-                
-                // NO Y RESTRICTIONS - camera can go anywhere in 3D space
-                
-                // Track that we're in orbit mode (prevent pan update from overwriting)
-                in_orbit_mode = 1;
-                
-                if camera_mode == 0 {
-                    // Top-Down Mode: Update camera position and look at target
-                    topdown_cam_pos = new_cam_pos;
-                    camera_pos = new_cam_pos;
-                    
-                    // Calculate direction vector from camera to target
-                    let to_target: Vec3 = heidic_vec3_sub(target_pos, new_cam_pos);
-                    let dist_to_target: f32 = heidic_vec3_distance(new_cam_pos, target_pos);
-                    
-                    // Calculate yaw and pitch from direction vector to ensure camera always faces target
-                    if dist_to_target > 0.001 {
-                        // Normalize direction (we'll calculate components manually)
-                        let dir_x: f32 = to_target.x / dist_to_target;
-                        let dir_y: f32 = to_target.y / dist_to_target;
-                        let dir_z: f32 = to_target.z / dist_to_target;
-                        
-                        // Yaw: rotation around Y axis (horizontal)
-                        // atan2(x, z) gives angle in XZ plane (0° = +Z, 90° = +X)
-                        let yaw_rad: f32 = heidic_atan2(dir_x, dir_z);
-                        let yaw_deg: f32 = heidic_convert_radians_to_degrees(yaw_rad);
-                        
-                        // Pitch: rotation around X axis (vertical)
-                        // asin(y) gives elevation angle (-90° to +90°)
-                        let pitch_rad: f32 = heidic_asin(dir_y);
-                        let pitch_deg: f32 = heidic_convert_radians_to_degrees(pitch_rad);
-                        
-                        topdown_cam_rot.x = pitch_deg;   // Pitch (vertical)
-                        topdown_cam_rot.y = yaw_deg;     // Yaw (horizontal)
-                        topdown_cam_rot.z = 0.0;         // Roll (no roll)
-                    } else {
-                        // Too close, use fallback angles
-                        topdown_cam_rot.x = -dolly_orbit_elevation;
-                        topdown_cam_rot.y = dolly_orbit_azimuth + 180.0;
-                        topdown_cam_rot.z = 0.0;
-                    }
-                    camera_rot = topdown_cam_rot;
-                } else {
-                    // FPS Mode: Update player position to orbit around target
-                    player_pos = new_cam_pos;
-                    
-                    // Calculate direction vector from camera to target
-                    let to_target: Vec3 = heidic_vec3_sub(target_pos, new_cam_pos);
-                    let dist_to_target: f32 = heidic_vec3_distance(new_cam_pos, target_pos);
-                    
-                    // Calculate yaw and pitch from direction vector
-                    if dist_to_target > 0.001 {
-                        let dir_x: f32 = to_target.x / dist_to_target;
-                        let dir_y: f32 = to_target.y / dist_to_target;
-                        let dir_z: f32 = to_target.z / dist_to_target;
-                        
-                        let yaw_rad: f32 = heidic_atan2(dir_x, dir_z);
-                        let yaw_deg: f32 = heidic_convert_radians_to_degrees(yaw_rad);
-                        
-                        let pitch_rad: f32 = heidic_asin(dir_y);
-                        let pitch_deg: f32 = heidic_convert_radians_to_degrees(pitch_rad);
-                        
-                        player_rot.y = yaw_deg;   // Yaw (horizontal)
-                        player_rot.x = pitch_deg;  // Pitch (vertical)
-                    } else {
-                        // Fallback
-                        player_rot.y = dolly_orbit_azimuth + 180.0;
-                        player_rot.x = -dolly_orbit_elevation;
-                    }
-                }
-            } else {
-                // No selection: use general dolly (same logic as walk mode)
-                let dolly_delta_x: f32 = heidic_get_mouse_delta_x(window);
-                let dolly_delta_y: f32 = heidic_get_mouse_delta_y(window);
-                let dolly_speed: f32 = 20.0;
-                
-                if camera_mode == 0 {
-                    // Top-down editor camera: use same dolly logic as walk mode
-                    // Calculate forward/right vectors from camera yaw rotation
-                    let yaw_rad: f32 = heidic_convert_degrees_to_radians(topdown_cam_rot.y);
-                    let forward_x: f32 = heidic_sin(yaw_rad);
-                    let forward_z: f32 = heidic_cos(yaw_rad);
-                    let right_x: f32 = heidic_cos(yaw_rad);
-                    let right_z: f32 = -heidic_sin(yaw_rad);
-                    let move_x: f32 = right_x * dolly_delta_x * dolly_speed + forward_x * dolly_delta_y * dolly_speed;
-                    let move_z: f32 = right_z * dolly_delta_x * dolly_speed + forward_z * dolly_delta_y * dolly_speed;
-                    // Move camera position (pan offset) based on calculated movement
-                    topdown_cam_pan_x = topdown_cam_pan_x + move_x;
-                    topdown_cam_pan_z = topdown_cam_pan_z + move_z;
-                } else {
-                    // Walk mode: keep existing perfect dolly logic (DO NOT CHANGE)
-                    let yaw_rad: f32 = heidic_convert_degrees_to_radians(player_rot.y);
-                    let forward_x: f32 = heidic_sin(yaw_rad);
-                    let forward_z: f32 = heidic_cos(yaw_rad);
-                    let right_x: f32 = heidic_cos(yaw_rad);
-                    let right_z: f32 = -heidic_sin(yaw_rad);
-                    let move_x: f32 = right_x * dolly_delta_x * dolly_speed + forward_x * dolly_delta_y * dolly_speed;
-                    let move_z: f32 = right_z * dolly_delta_x * dolly_speed + forward_z * dolly_delta_y * dolly_speed;
-                    player_pos.x = player_pos.x + move_x;
-                    player_pos.z = player_pos.z + move_z;
-                }
-            }
-            alt_was_pressed = 1; // Mark Alt as pressed
-        } else {
-            alt_was_pressed = 0; // Reset when Alt is released
-        }
-        
-        // Mouse Look (only in FPS mode, only when mouse_mode is disabled, and only when Alt is NOT pressed)
-        if camera_mode == 1 && mouse_mode == 0 && alt_pressed == 0 {
+        // Mouse Look (only when mouse_mode is disabled)
+        if mouse_mode == 0 {
             // Get mouse delta
             let mouse_delta_x: f32 = heidic_get_mouse_delta_x(window);
             let mouse_delta_y: f32 = heidic_get_mouse_delta_y(window);
@@ -552,18 +325,14 @@ fn main(): void {
             }
         }
         
-        // Spacebar (32) - Create new cube or wedge at mouse ray hit point (based on build_mode)
-        // Works in any mode - always uses mouse ray to find placement position
-        // Also try key code 57 as fallback (some systems use different codes)
-        let space_is_pressed: i32 = heidic_is_key_pressed(window, 32);
-        // Fallback: try key code 57 if 32 doesn't work
-        if space_is_pressed == 0 {
-            space_is_pressed = heidic_is_key_pressed(window, 57);
-        }
+        // Get mouse button states (used for both block placement and mode switching)
+        let mouse_right_pressed: i32 = heidic_is_mouse_button_pressed(window, 1);
         
-        if space_is_pressed == 1 {
-            if space_was_pressed == 0 {
-                print("SPACEBAR PRESSED! Creating cube at ray hit point\n");
+        // Right-click (button 1) - Create new cube or wedge at center ray hit point (only in build mode, mouse_mode == 0)
+        // Uses center of screen raycast for precise targeting
+        if mouse_mode == 0 && mouse_right_pressed == 1 {
+            if mouse_mode_right_was_pressed == 0 {
+                print("RIGHT-CLICK PRESSED! Creating block at center ray hit point\n");
                 
                 // Default cube size (1 meter = 100 units)
                 let default_cube_size: f32 = 100.0;
@@ -574,14 +343,14 @@ fn main(): void {
                 if stored_preview_valid == 1 {
                     // Use the preview position directly - this is exactly where the red cube is
                     create_pos = stored_preview_pos;
-                    print("Using stored preview position for cube placement\n");
+                    print("Using stored preview position for block placement\n");
                 } else {
                     // Fallback: calculate placement (shouldn't happen, but just in case)
                     print("WARNING: No valid preview position, calculating placement\n");
                     
-                    // Always use mouse ray to find where to place the cube
-                    let create_ray_origin: Vec3 = heidic_get_mouse_ray_origin(window);
-                    let create_ray_dir: Vec3 = heidic_get_mouse_ray_dir(window);
+                    // Use center ray to find where to place the block
+                    let create_ray_origin: Vec3 = heidic_get_center_ray_origin(window);
+                    let create_ray_dir: Vec3 = heidic_get_center_ray_dir(window);
                 let found_hit: i32 = 0;
                 let closest_dist: f32 = 100000000000.0; // Very large distance
                 let hit_cube_x: f32 = 0.0;
@@ -594,18 +363,26 @@ fn main(): void {
                 let is_ground_plane: i32 = 0;
                 let is_wedge: i32 = 0; // 1 = hit object is a wedge, 0 = cube or other
                 
-                // FIRST: Test the big grey ground plane cube (100m x 100m x 1m at y = -500)
+                // FIRST: Test the big grey ground plane cube (100m x 100m x 1m, top at y = 0)
                 // This is important geometry and needs to be pickable!
                 let ground_cube_x: f32 = 0.0;
-                let ground_cube_y: f32 = -500.0;
+                let ground_cube_y: f32 = -50.0; // Center at -0.5m so top is at y=0
                 let ground_cube_z: f32 = 0.0;
                 let ground_cube_sx: f32 = 10000.0; // 100 meters
                 let ground_cube_sy: f32 = 100.0;   // 1 meter thick
                 let ground_cube_sz: f32 = 10000.0; // 100 meters
                 
-                let ground_cube_hit: i32 = heidic_raycast_cube_hit(window, ground_cube_x, ground_cube_y, ground_cube_z, ground_cube_sx, ground_cube_sy, ground_cube_sz);
+                // Also test the vertical side plane (100m x 100m x 1m, bottom at y=0, 50m out from center)
+                let side_cube_x: f32 = 5000.0; // 50 meters out
+                let side_cube_y: f32 = 5000.0; // 50 meters up (center, so bottom at y=0)
+                let side_cube_z: f32 = 0.0;
+                let side_cube_sx: f32 = 100.0;   // 1 meter thick (in X direction after rotation)
+                let side_cube_sy: f32 = 10000.0; // 100 meters tall (in Y direction)
+                let side_cube_sz: f32 = 10000.0; // 100 meters wide (in Z direction)
+                
+                let ground_cube_hit: i32 = heidic_raycast_cube_hit_center(window, ground_cube_x, ground_cube_y, ground_cube_z, ground_cube_sx, ground_cube_sy, ground_cube_sz);
                 if ground_cube_hit == 1 {
-                    let ground_cube_hit_point: Vec3 = heidic_raycast_cube_hit_point(window, ground_cube_x, ground_cube_y, ground_cube_z, ground_cube_sx, ground_cube_sy, ground_cube_sz);
+                    let ground_cube_hit_point: Vec3 = heidic_raycast_cube_hit_point_center(window, ground_cube_x, ground_cube_y, ground_cube_z, ground_cube_sx, ground_cube_sy, ground_cube_sz);
                     let ground_cube_dist: f32 = (ground_cube_hit_point.x - create_ray_origin.x) * (ground_cube_hit_point.x - create_ray_origin.x) + (ground_cube_hit_point.y - create_ray_origin.y) * (ground_cube_hit_point.y - create_ray_origin.y) + (ground_cube_hit_point.z - create_ray_origin.z) * (ground_cube_hit_point.z - create_ray_origin.z);
                     if ground_cube_dist < closest_dist {
                         closest_dist = ground_cube_dist;
@@ -618,6 +395,26 @@ fn main(): void {
                         hit_cube_sy = ground_cube_sy;
                         hit_cube_sz = ground_cube_sz;
                         is_ground_plane = 1;
+                        found_hit = 1;
+                    }
+                }
+                
+                // Test vertical side plane
+                let side_cube_hit: i32 = heidic_raycast_cube_hit_center(window, side_cube_x, side_cube_y, side_cube_z, side_cube_sx, side_cube_sy, side_cube_sz);
+                if side_cube_hit == 1 {
+                    let side_cube_hit_point: Vec3 = heidic_raycast_cube_hit_point_center(window, side_cube_x, side_cube_y, side_cube_z, side_cube_sx, side_cube_sy, side_cube_sz);
+                    let side_cube_dist: f32 = (side_cube_hit_point.x - create_ray_origin.x) * (side_cube_hit_point.x - create_ray_origin.x) + (side_cube_hit_point.y - create_ray_origin.y) * (side_cube_hit_point.y - create_ray_origin.y) + (side_cube_hit_point.z - create_ray_origin.z) * (side_cube_hit_point.z - create_ray_origin.z);
+                    if side_cube_dist < closest_dist {
+                        closest_dist = side_cube_dist;
+                        create_pos = side_cube_hit_point;
+                        hit_point = side_cube_hit_point;
+                        hit_cube_x = side_cube_x;
+                        hit_cube_y = side_cube_y;
+                        hit_cube_z = side_cube_z;
+                        hit_cube_sx = side_cube_sx;
+                        hit_cube_sy = side_cube_sy;
+                        hit_cube_sz = side_cube_sz;
+                        is_ground_plane = 0; // Side plane is not the ground plane
                         found_hit = 1;
                     }
                 }
@@ -909,11 +706,11 @@ fn main(): void {
                     }
                 }
                 
-                space_was_pressed = 1;
+                mouse_mode_right_was_pressed = 1;
             }
-            } else {
-                space_was_pressed = 0;
-            }
+        } else {
+            mouse_mode_right_was_pressed = 0;
+        }
             
             // Key '0' (48) - Create wedge at mouse ray hit point (simplified - just stack on top)
             let key_0_pressed: i32 = heidic_is_key_pressed(window, 48);
@@ -1129,135 +926,29 @@ fn main(): void {
             player_pos.z = player_pos.z + right_z * move_speed;
         }
         
-        // Q = 81: Raise player (move up in Y)
-        if heidic_is_key_pressed(window, 81) == 1 {
-            player_pos.y = player_pos.y + move_speed;
-        }
-        // E = 69: Lower player (move down in Y)
-        if heidic_is_key_pressed(window, 69) == 1 {
+        // Left Shift = 340: Lower player (move down in Y)
+        let left_shift_pressed: i32 = heidic_is_key_pressed(window, 340);
+        if left_shift_pressed == 1 {
             player_pos.y = player_pos.y - move_speed;
         }
-        
-        // Update camera based on mode
-        if camera_mode == 1 {
-            // FPS Mode: Make camera follow player with offset
-            // Add offset to player position (100 units above player = eye height)
-            let offset: Vec3 = heidic_vec3(0.0, 100.0, 0.0);
-            let offset_pos: Vec3 = heidic_vec3_add(player_pos, offset);
-            
-            // Copy offset position to camera position
-            camera_pos = heidic_attach_camera_translation(offset_pos);
-            // Copy player rotation to camera rotation
-            camera_rot = heidic_attach_camera_rotation(player_rot);
-        } else {
-            // Top-Down Mode: Use fixed top-down camera with zoom and pan
-            // Ctrl+RMB drag for zoom (ZBrush style)
-            // Left Ctrl = 341, Right Ctrl = 345, Right Mouse Button = 1
-            let left_ctrl_pressed: i32 = heidic_is_key_pressed(window, 341);
-            let right_ctrl_pressed: i32 = heidic_is_key_pressed(window, 345);
-            let ctrl_pressed: i32 = 0;
-            if left_ctrl_pressed == 1 {
-                ctrl_pressed = 1;
-            }
-            if right_ctrl_pressed == 1 {
-                ctrl_pressed = 1;
-            }
-            
-            let right_mouse_pressed: i32 = heidic_is_mouse_button_pressed(window, 1);
-            
-            if ctrl_pressed == 1 && right_mouse_pressed == 1 {
-                // Get mouse delta Y for zoom/dolly
-                let mouse_delta_y: f32 = heidic_get_mouse_delta_y(window);
-                if mouse_delta_y != 0.0 {
-                    // If actively orbiting (Alt pressed) AND has selection: Adjust dolly distance
-                    // Otherwise: Always adjust zoom (camera height) - zoom should always work
-                    if alt_pressed == 1 && has_selection == 1 {
-                        // Dolly: Adjust distance to target (only when actively orbiting)
-                        // Negative delta = move closer (dolly in), positive = move away (dolly out)
-                        let dolly_speed: f32 = 50.0; // Units per pixel
-                        dolly_orbit_distance = dolly_orbit_distance - mouse_delta_y * dolly_speed;
-                        
-                        // Clamp distance to reasonable range (allow very close and very far)
-                        if dolly_orbit_distance < 10.0 {
-                            dolly_orbit_distance = 10.0; // Min: 10cm (very close)
-                        }
-                        if dolly_orbit_distance > 100000.0 {
-                            dolly_orbit_distance = 100000.0; // Max: 1km
-                        }
-                    } else {
-                        // Zoom: Adjust camera height (FOV-style zoom for top-down) - ALWAYS available
-                        // Speed proportional to camera height for consistent feel
-                        let zoom_speed_factor: f32 = topdown_cam_height / 10000.0; // Normalize to base height
-                        let zoom_speed: f32 = 50.0 * zoom_speed_factor; // Base speed multiplier
-                        topdown_cam_height = topdown_cam_height - mouse_delta_y * zoom_speed;
-                        
-                        // Clamp zoom level (allow going below ground if needed, but reasonable limits)
-                        if topdown_cam_height < 10.0 {
-                            topdown_cam_height = 10.0; // Min: 10cm (very close)
-                        }
-                        if topdown_cam_height > 100000.0 {
-                            topdown_cam_height = 100000.0; // Max: 1km
-                        }
-                    }
-                }
-            }
-            
-            // [ and ] keys for zoom (backup/alternative)
-            // [ = zoom in (lower height), ] = zoom out (higher height)
-            if heidic_is_key_pressed(window, 91) == 1 {
-                // Zoom in
-                let zoom_speed: f32 = 100.0; // Reduced speed for finer control
-                topdown_cam_height = topdown_cam_height - zoom_speed;
-                
-                // Clamp zoom level (min 100 units = 1 meter, max 50000 units = 500 meters)
-                if topdown_cam_height < 100.0 {
-                    topdown_cam_height = 100.0;
-                }
-            }
-            if heidic_is_key_pressed(window, 93) == 1 {
-                // Zoom out
-                let zoom_speed: f32 = 100.0; // Reduced speed for finer control
-                topdown_cam_height = topdown_cam_height + zoom_speed;
-                
-                // Clamp zoom level (min 1000 units = 10 meters, max 50000 units = 500 meters)
-                if topdown_cam_height > 50000.0 {
-                    topdown_cam_height = 50000.0;
-                }
-            }
-            
-            // MMB button press + drag for panning (translating camera across XZ plane)
-            let mouse_middle_pressed: i32 = heidic_is_mouse_button_pressed(window, 2);
-            if mouse_middle_pressed == 1 {
-                // Get mouse delta for panning
-                let mouse_delta_x: f32 = heidic_get_mouse_delta_x(window);
-                let mouse_delta_y: f32 = heidic_get_mouse_delta_y(window);
-                
-                if mouse_delta_x != 0.0 || mouse_delta_y != 0.0 {
-                    // Pan speed proportional to camera height for consistent feel
-                    // Higher camera = move faster, lower camera = move slower
-                    let pan_speed_factor: f32 = topdown_cam_height / 10000.0; // Normalize to base height
-                    let pan_speed: f32 = 4.0 * pan_speed_factor; // Increased base speed to 4.0
-                    
-                    // Mouse X moves camera X (reversed: drag right = move left, drag left = move right)
-                    topdown_cam_pan_x = topdown_cam_pan_x - mouse_delta_x * pan_speed;
-                    // Mouse Y moves camera Z (reversed: drag down = move forward, drag up = move back)
-                    topdown_cam_pan_z = topdown_cam_pan_z - mouse_delta_y * pan_speed;
-                }
-                mouse_middle_was_pressed = 1;
-            } else {
-                mouse_middle_was_pressed = 0;
-            }
-            
-            // Update top-down camera position with new height and pan offset
-            // BUT: Skip this if we're in orbit mode (orbit code already set camera_pos)
-            if in_orbit_mode == 0 {
-                topdown_cam_pos = heidic_vec3(topdown_cam_pan_x, topdown_cam_height, topdown_cam_pan_z);
-                camera_pos = topdown_cam_pos;
-                camera_rot = topdown_cam_rot;
-            }
-            // Reset orbit flag for next frame
-            in_orbit_mode = 0;
+        // Spacebar = 32 (or 57): Raise player (move up in Y)
+        let spacebar_pressed: i32 = heidic_is_key_pressed(window, 32);
+        if spacebar_pressed == 0 {
+            spacebar_pressed = heidic_is_key_pressed(window, 57);  // Fallback key code
         }
+        if spacebar_pressed == 1 {
+            player_pos.y = player_pos.y + move_speed;
+        }
+        
+        // FPS Mode: Make camera follow player with offset
+        // Add offset to player position (100 units above player = eye height)
+        let offset: Vec3 = heidic_vec3(0.0, 100.0, 0.0);
+        let offset_pos: Vec3 = heidic_vec3_add(player_pos, offset);
+        
+        // Copy offset position to camera position
+        camera_pos = heidic_attach_camera_translation(offset_pos);
+        // Copy player rotation to camera rotation
+        camera_rot = heidic_attach_camera_rotation(player_rot);
         
         // Update legacy variables for drawing
         cube_x = player_pos.x;
@@ -1342,31 +1033,33 @@ fn main(): void {
         }
         // print("[HEIDIC DEBUG] After main menu bar block\n");  // Debug: uncomment when needed
         
-        // Update Camera with Vec3 values
-        // print("[HEIDIC DEBUG] Before camera update\n");  // Debug: uncomment when needed
-        // Use larger far plane for top-down view to see distant objects
-        // print("[HEIDIC DEBUG] About to check camera_mode\n");  // Debug: uncomment when needed
-        if camera_mode == 0 {
-            // print("[HEIDIC DEBUG] camera_mode is 0 (top-down), calling heidic_update_camera_with_far\n");  // Debug: uncomment when needed
-            // Top-down mode: use 50000 units far plane (500 meters) to see everything
-            heidic_update_camera_with_far(camera_pos.x, camera_pos.y, camera_pos.z, camera_rot.x, camera_rot.y, camera_rot.z, 50000.0);
-            // print("[HEIDIC DEBUG] After heidic_update_camera_with_far\n");  // Debug: uncomment when needed
-        } else {
-            // print("[HEIDIC DEBUG] camera_mode is not 0 (FPS), calling heidic_update_camera\n");  // Debug: uncomment when needed
-            // FPS mode: use default 5000 units far plane (50 meters)
-            heidic_update_camera(camera_pos.x, camera_pos.y, camera_pos.z, camera_rot.x, camera_rot.y, camera_rot.z);
-            // print("[HEIDIC DEBUG] After heidic_update_camera\n");  // Debug: uncomment when needed
+        // Toolbar/Shelf - Fixed toolbar underneath menu bar
+        if heidic_imgui_begin_toolbar() == 1 {
+            // User can add buttons/widgets here
+            // They will be inside the child window, positioned at x=10
+            heidic_imgui_end_toolbar();
         }
+        
+        // Update Camera with Vec3 values
+        // FPS mode: use large far plane (100000 units = 1km) for better visibility
+        heidic_update_camera_with_far(camera_pos.x, camera_pos.y, camera_pos.z, camera_rot.x, camera_rot.y, camera_rot.z, 100000.0);
         // print("[HEIDIC DEBUG] After camera update block\n");  // Debug: uncomment when needed
         
-        // Draw solid ground plane cube: 100m x 100m x 1m thick at y = -5m (-500 units)
-        // 100 meters = 10000 units, 1 meter = 100 units, -5 meters = -500 units
+        // Draw solid ground plane cube: 100m x 100m x 1m thick, top at y = 0
+        // 100 meters = 10000 units, 1 meter = 100 units
+        // Center at y = -50 units (-0.5m) so top is at y = 0
         // Ensure default white texture is loaded before drawing non-textured geometry
         // This prevents texture color from tinting the ground plane
         // print("[HEIDIC DEBUG] Before ground plane drawing\n");  // Debug: uncomment when needed
         heidic_load_texture_for_rendering("default.bmp");
         // print("[HEIDIC DEBUG] After heidic_load_texture_for_rendering\n");  // Debug: uncomment when needed
-        heidic_draw_cube_grey(0.0, -500.0, 0.0, 0.0, 0.0, 0.0, 10000.0, 100.0, 10000.0);
+        heidic_draw_cube_grey(0.0, -50.0, 0.0, 0.0, 0.0, 0.0, 10000.0, 100.0, 10000.0);
+        
+        // Draw vertical side plane: 100m x 100m x 1m thick, orthogonal to floor
+        // Positioned 50m out from center (at edge of floor) and 50m up (bottom at y=0, top at y=100m)
+        // Center at x = 5000 units (50m), y = 5000 units (50m), z = 0
+        // No rotation needed - already oriented correctly (in YZ plane, facing along X axis)
+        heidic_draw_cube_grey(5000.0, 5000.0, 0.0, 0.0, 0.0, 0.0, 100.0, 10000.0, 10000.0);
         // print("[HEIDIC DEBUG] After heidic_draw_cube_grey\n");  // Debug: uncomment when needed
         
         // Draw Ground Plane grid (large grid at y=-300) - only if grid is visible
@@ -1375,19 +1068,8 @@ fn main(): void {
         }
         // print("[HEIDIC DEBUG] After ground plane grid\n");  // Debug: uncomment when needed
         
-        // Update player cube visibility based on camera mode
-        if camera_mode == 1 {
-            // Walk mode (FPS): make player cube invisible
-            player_cube_visible = INVISIBLE;
-        } else {
-            // Top-down mode: make player cube visible
-            player_cube_visible = VISIBLE;
-        }
-        
-        // Draw Player Cube (only if visible)
-        if player_cube_visible == VISIBLE {
-            heidic_draw_cube(cube_x, cube_y, cube_z, cube_rx, cube_ry, cube_rz, cube_sx, cube_sy, cube_sz);
-        }
+        // Player cube is always invisible in FPS mode
+        // (Drawing code removed - player_cube_visible is always INVISIBLE)
         // print("[HEIDIC DEBUG] After player cube drawing\n");  // Debug: uncomment when needed
         
         // Draw Origin Lines (1 meter = 100 cm = 100 units)
@@ -1591,7 +1273,6 @@ fn main(): void {
                 }
                 mesh_instance_index = mesh_instance_index + 1;
             }
-            print("[HEIDIC DEBUG] After mesh instance loop\n");
         } else {
             // print("[HEIDIC DEBUG] mesh_instance_count is 0, skipping mesh instance drawing\n");  // Debug: uncomment when needed
         }
@@ -1609,10 +1290,11 @@ fn main(): void {
         
         // Debug: Draw large red cube at ray hit point to visualize where ray intersects geometry
         // print("[HEIDIC DEBUG] About to enter raycast debug block\n");  // Debug: uncomment when needed
-        if 1 == 1 {
+        // Preview raycast: only in build mode (mouse_mode == 0), use center ray for precise targeting
+        if mouse_mode == 0 {
             // print("[HEIDIC DEBUG] Inside raycast debug block, getting ray origin/dir\n");  // Debug: uncomment when needed
-            let debug_ray_origin: Vec3 = heidic_get_mouse_ray_origin(window);
-            let debug_ray_dir: Vec3 = heidic_get_mouse_ray_dir(window);
+            let debug_ray_origin: Vec3 = heidic_get_center_ray_origin(window);
+            let debug_ray_dir: Vec3 = heidic_get_center_ray_dir(window);
             // print("[HEIDIC DEBUG] Got ray origin and dir, initializing variables\n");  // Debug: uncomment when needed
             let debug_hit_pos: Vec3 = heidic_vec3(0.0, 0.0, 0.0);
             let debug_found_hit: i32 = 0;
@@ -1628,21 +1310,29 @@ fn main(): void {
             let debug_is_wedge: i32 = 0; // 1 = hit object is a wedge, 0 = cube or other
             // print("[HEIDIC DEBUG] Initialized debug variables, about to test ground plane\n");  // Debug: uncomment when needed
             
-            // FIRST: Test the big grey ground plane cube (100m x 100m x 1m at y = -500)
+            // FIRST: Test the big grey ground plane cube (100m x 100m x 1m, top at y = 0)
         // This is important geometry and needs to be pickable!
         let ground_cube_x: f32 = 0.0;
-        let ground_cube_y: f32 = -500.0;
+        let ground_cube_y: f32 = -50.0; // Center at -0.5m so top is at y=0
         let ground_cube_z: f32 = 0.0;
         let ground_cube_sx: f32 = 10000.0; // 100 meters
         let ground_cube_sy: f32 = 100.0;   // 1 meter thick
         let ground_cube_sz: f32 = 10000.0; // 100 meters
         
+        // Also test the vertical side plane (100m x 100m x 1m, bottom at y=0, 50m out from center)
+        let side_cube_x: f32 = 5000.0; // 50 meters out
+        let side_cube_y: f32 = 5000.0; // 50 meters up (center, so bottom at y=0)
+        let side_cube_z: f32 = 0.0;
+        let side_cube_sx: f32 = 100.0;   // 1 meter thick (in X direction after rotation)
+        let side_cube_sy: f32 = 10000.0; // 100 meters tall (in Y direction)
+        let side_cube_sz: f32 = 10000.0; // 100 meters wide (in Z direction)
+        
         // print("[HEIDIC DEBUG] About to raycast ground plane\n");  // Debug: uncomment when needed
-        let ground_cube_hit: i32 = heidic_raycast_cube_hit(window, ground_cube_x, ground_cube_y, ground_cube_z, ground_cube_sx, ground_cube_sy, ground_cube_sz);
+        let ground_cube_hit: i32 = heidic_raycast_cube_hit_center(window, ground_cube_x, ground_cube_y, ground_cube_z, ground_cube_sx, ground_cube_sy, ground_cube_sz);
         // print("[HEIDIC DEBUG] After ground plane raycast\n");  // Debug: uncomment when needed
         if ground_cube_hit == 1 {
             // print("[HEIDIC DEBUG] Ground plane hit detected\n");  // Debug: uncomment when needed
-            let ground_cube_hit_point: Vec3 = heidic_raycast_cube_hit_point(window, ground_cube_x, ground_cube_y, ground_cube_z, ground_cube_sx, ground_cube_sy, ground_cube_sz);
+            let ground_cube_hit_point: Vec3 = heidic_raycast_cube_hit_point_center(window, ground_cube_x, ground_cube_y, ground_cube_z, ground_cube_sx, ground_cube_sy, ground_cube_sz);
             let ground_cube_dist: f32 = (ground_cube_hit_point.x - debug_ray_origin.x) * (ground_cube_hit_point.x - debug_ray_origin.x) + (ground_cube_hit_point.y - debug_ray_origin.y) * (ground_cube_hit_point.y - debug_ray_origin.y) + (ground_cube_hit_point.z - debug_ray_origin.z) * (ground_cube_hit_point.z - debug_ray_origin.z);
             if ground_cube_dist < debug_closest_dist {
                 debug_closest_dist = ground_cube_dist;
@@ -1654,6 +1344,25 @@ fn main(): void {
                 debug_hit_cube_sy = ground_cube_sy;
                 debug_hit_cube_sz = ground_cube_sz;
                 debug_is_ground_plane = 1;
+                debug_found_hit = 1;
+            }
+        }
+        
+        // Test vertical side plane
+        let side_cube_hit: i32 = heidic_raycast_cube_hit_center(window, side_cube_x, side_cube_y, side_cube_z, side_cube_sx, side_cube_sy, side_cube_sz);
+        if side_cube_hit == 1 {
+            let side_cube_hit_point: Vec3 = heidic_raycast_cube_hit_point_center(window, side_cube_x, side_cube_y, side_cube_z, side_cube_sx, side_cube_sy, side_cube_sz);
+            let side_cube_dist: f32 = (side_cube_hit_point.x - debug_ray_origin.x) * (side_cube_hit_point.x - debug_ray_origin.x) + (side_cube_hit_point.y - debug_ray_origin.y) * (side_cube_hit_point.y - debug_ray_origin.y) + (side_cube_hit_point.z - debug_ray_origin.z) * (side_cube_hit_point.z - debug_ray_origin.z);
+            if side_cube_dist < debug_closest_dist {
+                debug_closest_dist = side_cube_dist;
+                debug_hit_pos = side_cube_hit_point;
+                debug_hit_cube_x = side_cube_x;
+                debug_hit_cube_y = side_cube_y;
+                debug_hit_cube_z = side_cube_z;
+                debug_hit_cube_sx = side_cube_sx;
+                debug_hit_cube_sy = side_cube_sy;
+                debug_hit_cube_sz = side_cube_sz;
+                debug_is_ground_plane = 0; // Side plane is not the ground plane
                 debug_found_hit = 1;
             }
         }
@@ -1673,9 +1382,9 @@ fn main(): void {
                 let debug_cube_sy: f32 = heidic_get_cube_sy(debug_cube_index);
                 let debug_cube_sz: f32 = heidic_get_cube_sz(debug_cube_index);
                 
-                let debug_cube_hit: i32 = heidic_raycast_cube_hit(window, debug_cube_x, debug_cube_y, debug_cube_z, debug_cube_sx, debug_cube_sy, debug_cube_sz);
+                let debug_cube_hit: i32 = heidic_raycast_cube_hit_center(window, debug_cube_x, debug_cube_y, debug_cube_z, debug_cube_sx, debug_cube_sy, debug_cube_sz);
                 if debug_cube_hit == 1 {
-                    let debug_hit_point: Vec3 = heidic_raycast_cube_hit_point(window, debug_cube_x, debug_cube_y, debug_cube_z, debug_cube_sx, debug_cube_sy, debug_cube_sz);
+                    let debug_hit_point: Vec3 = heidic_raycast_cube_hit_point_center(window, debug_cube_x, debug_cube_y, debug_cube_z, debug_cube_sx, debug_cube_sy, debug_cube_sz);
                     let debug_dist: f32 = (debug_hit_point.x - debug_ray_origin.x) * (debug_hit_point.x - debug_ray_origin.x) + (debug_hit_point.y - debug_ray_origin.y) * (debug_hit_point.y - debug_ray_origin.y) + (debug_hit_point.z - debug_ray_origin.z) * (debug_hit_point.z - debug_ray_origin.z);
                     if debug_dist < debug_closest_dist {
                         debug_closest_dist = debug_dist;
@@ -1701,13 +1410,7 @@ fn main(): void {
         let debug_total_wedges: i32 = heidic_get_wedge_total_count();
         // print("[HEIDIC DEBUG] Starting wedge raycast loop\n");  // Debug: uncomment when needed
         while debug_wedge_index < debug_total_wedges {
-            if debug_wedge_index == 0 {
-                print("[HEIDIC DEBUG] First iteration of wedge raycast loop\n");
-            }
             if heidic_get_wedge_active(debug_wedge_index) == 1 {
-                if debug_wedge_index == 0 {
-                    print("[HEIDIC DEBUG] First wedge is active, getting position\n");
-                }
                 let debug_wedge_x: f32 = heidic_get_wedge_x(debug_wedge_index);
                 let debug_wedge_y: f32 = heidic_get_wedge_y(debug_wedge_index);
                 let debug_wedge_z: f32 = heidic_get_wedge_z(debug_wedge_index);
@@ -1715,15 +1418,9 @@ fn main(): void {
                 let debug_wedge_sy: f32 = heidic_get_wedge_sy(debug_wedge_index);
                 let debug_wedge_sz: f32 = heidic_get_wedge_sz(debug_wedge_index);
                 
-                if debug_wedge_index == 0 {
-                    print("[HEIDIC DEBUG] About to raycast wedge\n");
-                }
-                let debug_wedge_hit: i32 = heidic_raycast_cube_hit(window, debug_wedge_x, debug_wedge_y, debug_wedge_z, debug_wedge_sx, debug_wedge_sy, debug_wedge_sz);
-                if debug_wedge_index == 0 {
-                    print("[HEIDIC DEBUG] After wedge raycast call\n");
-                }
+                let debug_wedge_hit: i32 = heidic_raycast_cube_hit_center(window, debug_wedge_x, debug_wedge_y, debug_wedge_z, debug_wedge_sx, debug_wedge_sy, debug_wedge_sz);
                 if debug_wedge_hit == 1 {
-                    let debug_wedge_hit_point: Vec3 = heidic_raycast_cube_hit_point(window, debug_wedge_x, debug_wedge_y, debug_wedge_z, debug_wedge_sx, debug_wedge_sy, debug_wedge_sz);
+                    let debug_wedge_hit_point: Vec3 = heidic_raycast_cube_hit_point_center(window, debug_wedge_x, debug_wedge_y, debug_wedge_z, debug_wedge_sx, debug_wedge_sy, debug_wedge_sz);
                     let debug_wedge_dist: f32 = (debug_wedge_hit_point.x - debug_ray_origin.x) * (debug_wedge_hit_point.x - debug_ray_origin.x) + (debug_wedge_hit_point.y - debug_ray_origin.y) * (debug_wedge_hit_point.y - debug_ray_origin.y) + (debug_wedge_hit_point.z - debug_ray_origin.z) * (debug_wedge_hit_point.z - debug_ray_origin.z);
                     if debug_wedge_dist < debug_closest_dist {
                         debug_closest_dist = debug_wedge_dist;
@@ -1750,9 +1447,9 @@ fn main(): void {
         let debug_total_mesh_instances: i32 = heidic_get_mesh_instance_total_count();
         while debug_mesh_instance_index < debug_total_mesh_instances {
             if heidic_get_mesh_instance_active(debug_mesh_instance_index) == 1 {
-                let debug_mesh_hit: i32 = heidic_raycast_mesh_bbox_hit(window, debug_mesh_instance_index);
+                let debug_mesh_hit: i32 = heidic_raycast_mesh_bbox_hit_center(window, debug_mesh_instance_index);
                 if debug_mesh_hit == 1 {
-                    let debug_mesh_hit_point: Vec3 = heidic_raycast_mesh_bbox_hit_point(window, debug_mesh_instance_index);
+                    let debug_mesh_hit_point: Vec3 = heidic_raycast_mesh_bbox_hit_point_center(window, debug_mesh_instance_index);
                     let debug_mesh_dist: f32 = (debug_mesh_hit_point.x - debug_ray_origin.x) * (debug_mesh_hit_point.x - debug_ray_origin.x) + (debug_mesh_hit_point.y - debug_ray_origin.y) * (debug_mesh_hit_point.y - debug_ray_origin.y) + (debug_mesh_hit_point.z - debug_ray_origin.z) * (debug_mesh_hit_point.z - debug_ray_origin.z);
                     if debug_mesh_dist < debug_closest_dist {
                         debug_closest_dist = debug_mesh_dist;
@@ -1980,7 +1677,12 @@ fn main(): void {
         
         // Green lattice preview removed - red wireframe preview is sufficient
         // print("[HEIDIC DEBUG] End of raycast debug block\n");  // Debug: uncomment when needed
-        }  // End of if 1 == 1 (raycast debug block)
+        }  // End of if mouse_mode == 0 (build mode preview)
+        
+        // Draw crosshair in build mode (mouse_mode == 0)
+        if mouse_mode == 0 {
+            heidic_draw_crosshair(window, 20.0, 1.0, 1.0, 1.0);  // White crosshair, 20 pixel size
+        }
         // print("[HEIDIC DEBUG] After closing raycast debug block, before input handling\n");  // Debug: uncomment when needed
         // print("[HEIDIC DEBUG] About to start input handling\n");  // Debug: uncomment when needed
         
@@ -1988,17 +1690,17 @@ fn main(): void {
         // print("[HEIDIC DEBUG] About to get mouse button states\n");  // Debug: uncomment when needed
         let mouse_left_pressed: i32 = heidic_is_mouse_button_pressed(window, 0);
         // print("[HEIDIC DEBUG] Got mouse_left_pressed\n");  // Debug: uncomment when needed
-        let mouse_right_pressed: i32 = heidic_is_mouse_button_pressed(window, 1);
+        // mouse_right_pressed already declared above for block placement
         // print("[HEIDIC DEBUG] Got mouse_right_pressed\n");  // Debug: uncomment when needed
         // print("[HEIDIC DEBUG] About to handle mouse mode toggle\n");  // Debug: uncomment when needed
         
-        // Left-click: Enable mouse mode (cursor visible, picking enabled)
+        // Left-click: Switch to selection mode (mouse_mode = 1) - cursor visible, can select blocks and interact with UI
         // print("[HEIDIC DEBUG] About to check mouse_left_pressed\n");  // Debug: uncomment when needed
         if mouse_left_pressed == 1 {
             // print("[HEIDIC DEBUG] mouse_left_pressed is 1\n");  // Debug: uncomment when needed
             if mouse_mode_left_was_pressed == 0 {
-                // print("[HEIDIC DEBUG] mouse_mode_left_was_pressed is 0, enabling mouse mode\n");  // Debug: uncomment when needed
-                mouse_mode = 1; // Enable mouse mode
+                // print("[HEIDIC DEBUG] mouse_mode_left_was_pressed is 0, switching to selection mode\n");  // Debug: uncomment when needed
+                mouse_mode = 1; // Switch to selection mode
                 // print("[HEIDIC DEBUG] About to call heidic_set_cursor_mode\n");  // Debug: uncomment when needed
                 heidic_set_cursor_mode(window, 0); // 0 = normal (visible cursor)
                 // print("[HEIDIC DEBUG] After heidic_set_cursor_mode\n");  // Debug: uncomment when needed
@@ -2009,24 +1711,16 @@ fn main(): void {
         }
         // print("[HEIDIC DEBUG] After mouse_left_pressed handling\n");  // Debug: uncomment when needed
         
-        // Right-click: Disable mouse mode (cursor hidden, dolly/look enabled)
+        // Right-click: Switch to build mode (mouse_mode = 0) - cursor captured, crosshair visible, can place blocks
+        // Also handles block placement when in build mode
         // print("[HEIDIC DEBUG] About to check mouse_right_pressed\n");  // Debug: uncomment when needed
         if mouse_right_pressed == 1 {
             // print("[HEIDIC DEBUG] mouse_right_pressed is 1\n");  // Debug: uncomment when needed
             if mouse_mode_right_was_pressed == 0 {
-                // print("[HEIDIC DEBUG] mouse_mode_right_was_pressed is 0, disabling mouse mode\n");  // Debug: uncomment when needed
-                mouse_mode = 0; // Disable mouse mode
-                if camera_mode == 1 {
-                    // In walk mode, capture cursor for mouse look
-                    // print("[HEIDIC DEBUG] camera_mode is 1, setting cursor to captured\n");  // Debug: uncomment when needed
-                    heidic_set_cursor_mode(window, 2); // 2 = disabled (captured)
-                    // print("[HEIDIC DEBUG] After heidic_set_cursor_mode(2)\n");  // Debug: uncomment when needed
-                } else {
-                    // In top-down mode, just hide cursor
-                    // print("[HEIDIC DEBUG] camera_mode is not 1, setting cursor to hidden\n");  // Debug: uncomment when needed
-                    heidic_set_cursor_mode(window, 1); // 1 = hidden
-                    // print("[HEIDIC DEBUG] After heidic_set_cursor_mode(1)\n");  // Debug: uncomment when needed
-                }
+                // print("[HEIDIC DEBUG] mouse_mode_right_was_pressed is 0, switching to build mode\n");  // Debug: uncomment when needed
+                mouse_mode = 0; // Switch to build mode
+                // Capture cursor in build mode for FPS mouse look
+                heidic_set_cursor_mode(window, 2); // 2 = disabled (captured)
                 mouse_mode_right_was_pressed = 1;
             } else {
                 // print("[HEIDIC DEBUG] mouse_mode_right_was_pressed is not 0, skipping\n");  // Debug: uncomment when needed
@@ -2034,6 +1728,11 @@ fn main(): void {
         } else {
             // print("[HEIDIC DEBUG] mouse_right_pressed is not 1\n");  // Debug: uncomment when needed
             mouse_mode_right_was_pressed = 0;
+        }
+        
+        // Ensure cursor is always captured in build mode (every frame check)
+        if mouse_mode == 0 {
+            heidic_set_cursor_mode(window, 2); // 2 = disabled (captured) for FPS mode
         }
         // print("[HEIDIC DEBUG] After mouse_right_pressed handling\n");  // Debug: uncomment when needed
         // print("[HEIDIC DEBUG] About to continue after mouse mode handling\n");  // Debug: uncomment when needed
@@ -2052,7 +1751,7 @@ fn main(): void {
         let gizmo_clicked: i32 = 0;
         // print("[HEIDIC DEBUG] After initializing gizmo_clicked\n");  // Debug: uncomment when needed
         // print("[HEIDIC DEBUG] About to check gizmo interaction conditions\n");  // Debug: uncomment when needed
-        if mouse_mode == 1 && mouse_left_pressed == 1 && alt_pressed == 0 && has_mesh_selection == 1 && selected_mesh_instance_id >= 0 {
+        if mouse_mode == 1 && mouse_left_pressed == 1 && has_mesh_selection == 1 && selected_mesh_instance_id >= 0 {
             // print("[HEIDIC DEBUG] Gizmo interaction conditions met, entering block\n");  // Debug: uncomment when needed
             // A mesh is selected - check if gizmo would be clicked
             let mesh_center_x: f32 = heidic_get_mesh_instance_center_x(selected_mesh_instance_id);
@@ -2090,9 +1789,9 @@ fn main(): void {
         // print("[HEIDIC DEBUG] After gizmo interaction check\n");  // Debug: uncomment when needed
         
         // Selection: Click to select cubes - test ALL cubes
-        // Only allow selection when mouse_mode is enabled AND Alt is NOT pressed (Alt+Click is for orbit, not selection)
+        // Only allow selection when mouse_mode is enabled (selection mode)
         // print("[HEIDIC DEBUG] About to check selection conditions\n");  // Debug: uncomment when needed
-        if mouse_mode == 1 && mouse_left_pressed == 1 && alt_pressed == 0 {
+        if mouse_mode == 1 && mouse_left_pressed == 1 {
             // print("[HEIDIC DEBUG] Selection conditions met, entering block\n");  // Debug: uncomment when needed
             // Check if Ctrl is pressed for multi-select
             let ctrl_left_pressed: i32 = heidic_is_key_pressed(window, 341);
@@ -2835,9 +2534,7 @@ fn main(): void {
             
             // Transform Control Window
             if has_mesh_selection == 1 && selected_mesh_instance_id >= 0 {
-                print("[HEIDIC DEBUG] About to begin Transform Control window (mesh)\n");
                 if heidic_imgui_begin("Transform Control") == 1 {
-                    print("[HEIDIC DEBUG] Inside Transform Control window (mesh)\n");
                     // Get current transform values
                     let current_x: f32 = heidic_get_mesh_instance_x(selected_mesh_instance_id);
                     let current_y: f32 = heidic_get_mesh_instance_y(selected_mesh_instance_id);
@@ -2956,6 +2653,32 @@ fn main(): void {
                         heidic_set_mesh_instance_rotation(selected_mesh_instance_id, current_rx, current_ry, new_rz);
                     }
                     
+                    heidic_imgui_separator();
+                    
+                    // Texture Input
+                    heidic_imgui_text("Texture:");
+                    let texture_input_result: i32 = heidic_imgui_input_text_mesh_texture(selected_mesh_instance_id);
+                    if texture_input_result == 1 {
+                        // Enter was pressed, texture was applied
+                        print("Texture applied successfully\n");
+                    }
+                    heidic_imgui_same_line();
+                    if heidic_imgui_button("Apply") == 1 {
+                        let texture_path: string = heidic_get_mesh_texture_input_buffer(selected_mesh_instance_id);
+                        if texture_path != "" {
+                            let result: i32 = heidic_set_mesh_instance_texture(selected_mesh_instance_id, texture_path);
+                            if result == 1 {
+                                print("Texture applied successfully: ");
+                                print(texture_path);
+                                print("\n");
+                            } else {
+                                print("Failed to apply texture: ");
+                                print(texture_path);
+                                print("\n");
+                            }
+                        }
+                    }
+                    
                     heidic_imgui_end();
                 }
             }
@@ -2964,9 +2687,7 @@ fn main(): void {
             if has_selection == 1 && selected_cube_index >= 2.0 {
                 let cube_storage_index: i32 = heidic_float_to_int(selected_cube_index - 2.0);
                 if heidic_get_cube_active(cube_storage_index) == 1 {
-                    print("[HEIDIC DEBUG] About to begin Transform Control window (mesh)\n");
                 if heidic_imgui_begin("Transform Control") == 1 {
-                    print("[HEIDIC DEBUG] Inside Transform Control window (mesh)\n");
                         // Get current transform values
                         let current_x: f32 = heidic_get_cube_x(cube_storage_index);
                         let current_y: f32 = heidic_get_cube_y(cube_storage_index);
@@ -3170,6 +2891,120 @@ fn main(): void {
                     
                     texture_index = texture_index + 1;
                 }
+                
+                heidic_imgui_end();
+            }
+            
+            // Material Textures Window (for multi-material meshes)
+            if heidic_imgui_begin("Material Textures") == 1 {
+                let mesh_count: i32 = heidic_get_mesh_count();
+                if mesh_count > 0 {
+                    let mesh_index: i32 = 0;
+                    while mesh_index < mesh_count {
+                        let mesh_id: i32 = heidic_get_mesh_id(mesh_index);
+                        let material_texture_count: i32 = heidic_get_mesh_material_texture_count(mesh_id);
+                        
+                        if material_texture_count > 0 {
+                            let mesh_id_str: string = "";
+                            let count_str: string = "";
+                            heidic_imgui_text("Loaded Material Textures:");
+                            
+                            let mat_tex_index: i32 = 0;
+                            let items_per_row: i32 = 2;
+                            let current_col: i32 = 0;
+                            let swatch_size: f32 = 256.0;
+                            
+                            while mat_tex_index < material_texture_count {
+                                let texture_path: string = heidic_get_mesh_material_texture_path(mesh_id, mat_tex_index);
+                                let texture_id: i64 = heidic_get_mesh_material_texture_preview(mesh_id, texture_path);
+                                
+                                if texture_id != 0 {
+                                    let button_id: string = texture_path;
+                                    heidic_imgui_image_button(button_id, texture_id, swatch_size, swatch_size, 1.0, 1.0, 1.0, 1.0);
+                                    heidic_imgui_text_str_wrapper(texture_path);
+                                } else {
+                                    heidic_imgui_text_str_wrapper(texture_path);
+                                    heidic_imgui_same_line();
+                                    heidic_imgui_text("(failed to load)");
+                                }
+                                
+                                current_col = current_col + 1;
+                                if current_col < items_per_row {
+                                    heidic_imgui_same_line();
+                                } else {
+                                    current_col = 0;
+                                }
+                                
+                                mat_tex_index = mat_tex_index + 1;
+                            }
+                            
+                            heidic_imgui_separator();
+                        }
+                        
+                        mesh_index = mesh_index + 1;
+                    }
+                } else {
+                    heidic_imgui_text("No meshes loaded");
+                }
+                
+                heidic_imgui_end();
+            }
+            
+            // UV Editor Window
+            if heidic_imgui_begin("UV Editor") == 1 {
+                let mesh_count: i32 = heidic_get_mesh_count();
+                if mesh_count > 0 {
+                    let mesh_index: i32 = 0;
+                    while mesh_index < mesh_count {
+                        let mesh_id: i32 = heidic_get_mesh_id(mesh_index);
+                        heidic_imgui_text("Mesh ID: ");
+                        heidic_imgui_same_line();
+                        heidic_imgui_text_int(mesh_id);
+                        
+                        heidic_imgui_text("Tip: Only materials with 'Diffuse' textures are rendered.");
+                        heidic_imgui_text("Bright shells = will render, Dim shells = skipped (non-diffuse)");
+                        
+                        // Draw UV layout - uses ImGui's content region automatically
+                        heidic_draw_uv_layout(mesh_id);
+                        
+                        heidic_imgui_separator();
+                        mesh_index = mesh_index + 1;
+                    }
+                } else {
+                    heidic_imgui_text("No meshes loaded");
+                }
+                
+                heidic_imgui_end();
+            }
+            
+            // Performance Info Window
+            if heidic_imgui_begin("Performance Info") == 1 {
+                let fps: f32 = heidic_get_fps();
+                let frame_time: f32 = heidic_get_frame_time();
+                let polygon_count: i32 = heidic_get_total_polygon_count();
+                let texture_memory: f32 = heidic_get_texture_memory_mb();
+                
+                heidic_imgui_text("FPS: ");
+                heidic_imgui_same_line();
+                heidic_imgui_text_float("", fps);
+                
+                heidic_imgui_text("Frame Time: ");
+                heidic_imgui_same_line();
+                heidic_imgui_text_float("", frame_time);
+                heidic_imgui_same_line();
+                heidic_imgui_text(" ms");
+                
+                heidic_imgui_separator();
+                
+                heidic_imgui_text("Polygons: ");
+                heidic_imgui_same_line();
+                heidic_imgui_text_int(polygon_count);
+                
+                heidic_imgui_text("Texture Memory: ");
+                heidic_imgui_same_line();
+                heidic_imgui_text_float("", texture_memory);
+                heidic_imgui_same_line();
+                heidic_imgui_text(" MB");
                 
                 heidic_imgui_end();
             }
