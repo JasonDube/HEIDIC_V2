@@ -400,6 +400,9 @@ extern "C" {
     int32_t heidic_imgui_button(const char* label);
 }
 extern "C" {
+    int32_t heidic_imgui_button_sized(const char* label, float size_x, float size_y);
+}
+extern "C" {
     int32_t heidic_imgui_collapsing_header(const char* label);
 }
 extern "C" {
@@ -754,6 +757,84 @@ extern "C" {
     const char* heidic_format_wedge_name(int32_t index);
 }
 extern "C" {
+    int32_t heidic_create_directional_light(float x, float y, float z, float dir_x, float dir_y, float dir_z);
+}
+extern "C" {
+    int32_t heidic_get_directional_light_count();
+}
+extern "C" {
+    int32_t heidic_get_directional_light_total_count();
+}
+extern "C" {
+    float heidic_get_directional_light_x(int32_t light_id);
+}
+extern "C" {
+    float heidic_get_directional_light_y(int32_t light_id);
+}
+extern "C" {
+    float heidic_get_directional_light_z(int32_t light_id);
+}
+extern "C" {
+    float heidic_get_directional_light_dir_x(int32_t light_id);
+}
+extern "C" {
+    float heidic_get_directional_light_dir_y(int32_t light_id);
+}
+extern "C" {
+    float heidic_get_directional_light_dir_z(int32_t light_id);
+}
+extern "C" {
+    int32_t heidic_get_directional_light_active(int32_t light_id);
+}
+extern "C" {
+    void heidic_set_directional_light_pos(int32_t light_id, float x, float y, float z);
+}
+extern "C" {
+    void heidic_set_directional_light_dir(int32_t light_id, float dir_x, float dir_y, float dir_z);
+}
+extern "C" {
+    float heidic_get_directional_light_r(int32_t light_id);
+}
+extern "C" {
+    float heidic_get_directional_light_g(int32_t light_id);
+}
+extern "C" {
+    float heidic_get_directional_light_b(int32_t light_id);
+}
+extern "C" {
+    void heidic_set_directional_light_color(int32_t light_id, float r, float g, float b);
+}
+extern "C" {
+    float heidic_get_directional_light_intensity(int32_t light_id);
+}
+extern "C" {
+    void heidic_set_directional_light_intensity(int32_t light_id, float intensity);
+}
+extern "C" {
+    const char* heidic_format_light_name(int32_t light_id);
+}
+extern "C" {
+    void heidic_draw_all_directional_lights();
+}
+extern "C" {
+    void heidic_clear_light_selection();
+}
+extern "C" {
+    void heidic_add_light_to_selection(int32_t light_id);
+}
+extern "C" {
+    void heidic_remove_light_from_selection(int32_t light_id);
+}
+extern "C" {
+    void heidic_toggle_light_selection(int32_t light_id);
+}
+extern "C" {
+    int32_t heidic_is_light_selected(int32_t light_id);
+}
+extern "C" {
+    int32_t heidic_get_light_selection_count();
+}
+extern "C" {
     void heidic_combine_connected_cubes();
 }
 extern "C" {
@@ -888,7 +969,47 @@ int heidic_main() {
         }
         std::string  default_ini_path_load = "";
         heidic_imgui_load_layout(default_ini_path_load.c_str());
-        Vec3  player_pos = heidic_vec3(3000, 100, 3000);
+        std::cout << "Auto-loading model and light at startup...\n" << std::endl;
+        std::string  auto_model_path = "../../models/eve_1.obj";
+        int32_t  auto_mesh_id = heidic_load_obj_mesh(auto_model_path.c_str());
+        if ((auto_mesh_id >= 0)) {
+            std::cout << "Auto-loaded model: " << std::endl;
+            std::cout << auto_model_path << std::endl;
+            std::cout << " (ID: " << std::endl;
+            std::cout << auto_mesh_id << std::endl;
+            std::cout << ")\n" << std::endl;
+            std::string  auto_texture_path = "../../models/Textures/eve_tex.png";
+            heidic_set_mesh_instance_texture(auto_mesh_id, auto_texture_path.c_str());
+        } else {
+            std::cout << "Failed to auto-load model, continuing anyway...\n" << std::endl;
+        }
+        float  light_x = 0;
+        float  light_y = 500;
+        float  light_z = 0;
+        float  light_dir_x = 0;
+        float  light_dir_y = -1;
+        float  light_dir_z = 0;
+        int32_t  auto_light_id = heidic_create_directional_light(light_x, light_y, light_z, light_dir_x, light_dir_y, light_dir_z);
+        if ((auto_light_id >= 0)) {
+            std::cout << "Auto-created directional light (ID: " << std::endl;
+            std::cout << auto_light_id << std::endl;
+            std::cout << ") at (" << std::endl;
+            std::cout << light_x << std::endl;
+            std::cout << ", " << std::endl;
+            std::cout << light_y << std::endl;
+            std::cout << ", " << std::endl;
+            std::cout << light_z << std::endl;
+            std::cout << ") pointing (" << std::endl;
+            std::cout << light_dir_x << std::endl;
+            std::cout << ", " << std::endl;
+            std::cout << light_dir_y << std::endl;
+            std::cout << ", " << std::endl;
+            std::cout << light_dir_z << std::endl;
+            std::cout << ")\n" << std::endl;
+        } else {
+            std::cout << "Failed to auto-create light, continuing anyway...\n" << std::endl;
+        }
+        Vec3  player_pos = heidic_vec3(100, 100, 100);
         Vec3  player_rot = heidic_vec3(0, 0, 0);
         Vec3  camera_pos = heidic_vec3(0, 100, 0);
         Vec3  camera_rot = heidic_vec3(0, 0, 0);
@@ -902,6 +1023,9 @@ int heidic_main() {
         float  cube_sy = 100;
         float  cube_sz = 100;
         float  move_speed = 15;
+        int32_t  slow_speed_mode = 0;
+        float  normal_speed = 15;
+        float  slow_speed = 1;
         float  rot_speed = 2;
         float  mouse_sensitivity = 0.1;
         float  pitch_max = 90;
@@ -937,6 +1061,14 @@ int heidic_main() {
         float  selected_wedge_y = 0;
         float  selected_wedge_z = 0;
         float  selected_wedge_sx = 0;
+        int32_t  selected_light_id = -1;
+        float  selected_light_x = 0;
+        float  selected_light_y = 0;
+        float  selected_light_z = 0;
+        float  selected_light_dir_x = 0;
+        float  selected_light_dir_y = 0;
+        float  selected_light_dir_z = 0;
+        int32_t  has_light_selection = 0;
         float  selected_wedge_sy = 0;
         float  selected_wedge_sz = 0;
         int32_t  has_wedge_selection = 0;
@@ -948,6 +1080,7 @@ int heidic_main() {
         int32_t  build_mode = 0;
         int32_t  key_1_was_pressed = 0;
         int32_t  key_2_was_pressed = 0;
+        int32_t  key_3_was_pressed = 0;
         int32_t  wedge_preview_rotation = 0;
         int32_t  last_wedge_preview_rotation = -1;
         int32_t  combine_c_was_pressed = 0;
@@ -981,8 +1114,14 @@ int heidic_main() {
                 if ((is_editing_combination >= 0)) {
                     heidic_stop_editing_combination_name();
                 } else {
-                    heidic_set_window_should_close(window, 1);
+                    if ((mouse_mode == 0)) {
+                        mouse_mode = 1;
+                        heidic_set_cursor_mode(window, 0);
+                    }
                 }
+            }
+            if ((heidic_is_key_pressed(window, 301) == 1)) {
+                heidic_set_window_should_close(window, 1);
             }
             if ((block_input == 0)) {
                 int32_t  f1_is_pressed = heidic_is_key_pressed(window, 290);
@@ -1043,6 +1182,16 @@ int heidic_main() {
                     key_2_was_pressed = 1;
                 } else {
                     key_2_was_pressed = 0;
+                }
+                int32_t  key_3_pressed = heidic_is_key_pressed(window, 51);
+                if ((key_3_pressed == 1)) {
+                    if ((key_3_was_pressed == 0)) {
+                        build_mode = 2;
+                        std::cout << "Build mode: Light\n" << std::endl;
+                    }
+                    key_3_was_pressed = 1;
+                } else {
+                    key_3_was_pressed = 0;
                 }
                 if ((build_mode == 1)) {
                     float  mouse_scroll = heidic_get_mouse_scroll_y(window);
@@ -1261,68 +1410,78 @@ int heidic_main() {
                             block_index = heidic_create_cube_with_color(create_pos.x, create_pos.y, create_pos.z, default_cube_size, default_cube_size, default_cube_size, block_r, block_g, block_b);
                             std::cout << "Created cube at index: " << std::endl;
                         } else {
-                            float  wedge_rot_x = 0;
-                            float  wedge_rot_y = 0;
-                            float  wedge_rot_z = 0;
-                            if ((wedge_preview_rotation == 0)) {
-                                wedge_rot_x = 270;
-                                wedge_rot_y = 180;
-                                wedge_rot_z = 90;
+                            if ((build_mode == 2)) {
+                                float  light_dir_x = 0;
+                                float  light_dir_y = -1;
+                                float  light_dir_z = 0;
+                                int32_t  light_id = heidic_create_directional_light(create_pos.x, create_pos.y, create_pos.z, light_dir_x, light_dir_y, light_dir_z);
+                                std::cout << "Created directional light at index: " << std::endl;
+                                std::cout << light_id << std::endl;
+                                std::cout << "\n" << std::endl;
                             } else {
-                                if ((wedge_preview_rotation == 1)) {
-                                    wedge_rot_x = 180;
-                                    wedge_rot_y = 90;
-                                    wedge_rot_z = 270;
+                                float  wedge_rot_x = 0;
+                                float  wedge_rot_y = 0;
+                                float  wedge_rot_z = 0;
+                                if ((wedge_preview_rotation == 0)) {
+                                    wedge_rot_x = 270;
+                                    wedge_rot_y = 180;
+                                    wedge_rot_z = 90;
                                 } else {
-                                    if ((wedge_preview_rotation == 2)) {
-                                        wedge_rot_x = 90;
-                                        wedge_rot_y = 270;
-                                        wedge_rot_z = 180;
+                                    if ((wedge_preview_rotation == 1)) {
+                                        wedge_rot_x = 180;
+                                        wedge_rot_y = 90;
+                                        wedge_rot_z = 270;
                                     } else {
-                                        if ((wedge_preview_rotation == 3)) {
-                                            wedge_rot_x = 180;
-                                            wedge_rot_y = 0;
-                                            wedge_rot_z = 270;
+                                        if ((wedge_preview_rotation == 2)) {
+                                            wedge_rot_x = 90;
+                                            wedge_rot_y = 270;
+                                            wedge_rot_z = 180;
                                         } else {
-                                            if ((wedge_preview_rotation == 4)) {
+                                            if ((wedge_preview_rotation == 3)) {
                                                 wedge_rot_x = 180;
-                                                wedge_rot_y = 180;
-                                                wedge_rot_z = 90;
+                                                wedge_rot_y = 0;
+                                                wedge_rot_z = 270;
                                             } else {
-                                                if ((wedge_preview_rotation == 5)) {
+                                                if ((wedge_preview_rotation == 4)) {
                                                     wedge_rot_x = 180;
-                                                    wedge_rot_y = 90;
+                                                    wedge_rot_y = 180;
                                                     wedge_rot_z = 90;
                                                 } else {
-                                                    if ((wedge_preview_rotation == 6)) {
+                                                    if ((wedge_preview_rotation == 5)) {
                                                         wedge_rot_x = 180;
-                                                        wedge_rot_y = 270;
+                                                        wedge_rot_y = 90;
                                                         wedge_rot_z = 90;
                                                     } else {
-                                                        if ((wedge_preview_rotation == 7)) {
+                                                        if ((wedge_preview_rotation == 6)) {
                                                             wedge_rot_x = 180;
-                                                            wedge_rot_y = 0;
+                                                            wedge_rot_y = 270;
                                                             wedge_rot_z = 90;
                                                         } else {
-                                                            if ((wedge_preview_rotation == 8)) {
+                                                            if ((wedge_preview_rotation == 7)) {
                                                                 wedge_rot_x = 180;
-                                                                wedge_rot_y = 90;
-                                                                wedge_rot_z = 180;
+                                                                wedge_rot_y = 0;
+                                                                wedge_rot_z = 90;
                                                             } else {
-                                                                if ((wedge_preview_rotation == 9)) {
-                                                                    wedge_rot_x = 90;
-                                                                    wedge_rot_y = 270;
-                                                                    wedge_rot_z = 270;
+                                                                if ((wedge_preview_rotation == 8)) {
+                                                                    wedge_rot_x = 180;
+                                                                    wedge_rot_y = 90;
+                                                                    wedge_rot_z = 180;
                                                                 } else {
-                                                                    if ((wedge_preview_rotation == 10)) {
+                                                                    if ((wedge_preview_rotation == 9)) {
                                                                         wedge_rot_x = 90;
                                                                         wedge_rot_y = 270;
-                                                                        wedge_rot_z = 90;
+                                                                        wedge_rot_z = 270;
                                                                     } else {
-                                                                        if ((wedge_preview_rotation == 11)) {
-                                                                            wedge_rot_x = 180;
-                                                                            wedge_rot_y = 0;
-                                                                            wedge_rot_z = 180;
+                                                                        if ((wedge_preview_rotation == 10)) {
+                                                                            wedge_rot_x = 90;
+                                                                            wedge_rot_y = 270;
+                                                                            wedge_rot_z = 90;
+                                                                        } else {
+                                                                            if ((wedge_preview_rotation == 11)) {
+                                                                                wedge_rot_x = 180;
+                                                                                wedge_rot_y = 0;
+                                                                                wedge_rot_z = 180;
+                                                                            }
                                                                         }
                                                                     }
                                                                 }
@@ -1334,10 +1493,10 @@ int heidic_main() {
                                         }
                                     }
                                 }
+                                block_index = heidic_create_wedge_with_color(create_pos.x, create_pos.y, create_pos.z, default_cube_size, default_cube_size, default_cube_size, block_r, block_g, block_b);
+                                heidic_set_wedge_rotation(block_index, wedge_rot_x, wedge_rot_y, wedge_rot_z);
+                                std::cout << "Created wedge at index: " << std::endl;
                             }
-                            block_index = heidic_create_wedge_with_color(create_pos.x, create_pos.y, create_pos.z, default_cube_size, default_cube_size, default_cube_size, block_r, block_g, block_b);
-                            heidic_set_wedge_rotation(block_index, wedge_rot_x, wedge_rot_y, wedge_rot_z);
-                            std::cout << "Created wedge at index: " << std::endl;
                         }
                         if ((block_index >= 0)) {
                             std::cout << block_index << std::endl;
@@ -1609,6 +1768,14 @@ int heidic_main() {
                     heidic_imgui_end_main_menu_bar();
                 }
                 if ((heidic_imgui_begin_toolbar() == 1)) {
+                    if ((heidic_imgui_button_sized("S", 10, 10) == 1)) {
+                        slow_speed_mode = (1 - slow_speed_mode);
+                    }
+                    if ((slow_speed_mode == 1)) {
+                        move_speed = slow_speed;
+                    } else {
+                        move_speed = normal_speed;
+                    }
                     heidic_imgui_end_toolbar();
                 }
                 heidic_update_camera_with_far(camera_pos.x, camera_pos.y, camera_pos.z, camera_rot.x, camera_rot.y, camera_rot.z, 100000);
@@ -1740,6 +1907,7 @@ int heidic_main() {
                     }
                 } else {
                 }
+                heidic_draw_all_directional_lights();
                 heidic_draw_ray(window, 50000, 1, 1, 0);
                 if ((mouse_mode == 0)) {
                     Vec3  debug_ray_origin = heidic_get_center_ray_origin(window);
@@ -2277,6 +2445,21 @@ int heidic_main() {
                     }
                 }
             }
+            if (((has_light_selection == 1) && (selected_light_id >= 0))) {
+                selected_light_x = heidic_get_directional_light_x(selected_light_id);
+                selected_light_y = heidic_get_directional_light_y(selected_light_id);
+                selected_light_z = heidic_get_directional_light_z(selected_light_id);
+                Vec3  new_light_pos = heidic_gizmo_translate(window, selected_light_x, selected_light_y, selected_light_z);
+                int32_t  translate_interacting = heidic_gizmo_is_interacting();
+                if ((((new_light_pos.x != selected_light_x) || (new_light_pos.y != selected_light_y)) || (new_light_pos.z != selected_light_z))) {
+                    selected_light_x = new_light_pos.x;
+                    selected_light_y = new_light_pos.y;
+                    selected_light_z = new_light_pos.z;
+                    if ((translate_interacting == 1)) {
+                        heidic_set_directional_light_pos(selected_light_id, selected_light_x, selected_light_y, selected_light_z);
+                    }
+                }
+            }
             if ((show_debug == 1)) {
                 if ((heidic_imgui_begin("Codex Of Forms") == 1)) {
                     int32_t  combination_count = heidic_get_combination_count();
@@ -2443,6 +2626,47 @@ int heidic_main() {
                                 heidic_imgui_pop_id();
                             }
                             wedge_index = (wedge_index + 1);
+                        }
+                    }
+                    int32_t  light_total_count = heidic_get_directional_light_total_count();
+                    if ((light_total_count > 0)) {
+                        heidic_imgui_separator();
+                        heidic_imgui_text("Lights:");
+                        int32_t  light_index = 0;
+                        while ((light_index < light_total_count)) {
+                            if ((heidic_get_directional_light_active(light_index) == 1)) {
+                                heidic_imgui_push_id((light_index + 30000));
+                                std::string  light_name = heidic_format_light_name(light_index);
+                                int32_t  is_light_selected = heidic_is_light_selected(light_index);
+                                if ((heidic_imgui_selectable_str(light_name.c_str()) == 1)) {
+                                    if ((is_light_selected == 1)) {
+                                        heidic_clear_light_selection();
+                                        has_light_selection = 0;
+                                        selected_light_id = -1;
+                                    } else {
+                                        heidic_clear_selection();
+                                        heidic_clear_mesh_selection();
+                                        selected_wedge_index = -1;
+                                        heidic_clear_light_selection();
+                                        heidic_add_light_to_selection(light_index);
+                                        selected_light_id = light_index;
+                                        selected_light_x = heidic_get_directional_light_x(light_index);
+                                        selected_light_y = heidic_get_directional_light_y(light_index);
+                                        selected_light_z = heidic_get_directional_light_z(light_index);
+                                        selected_light_dir_x = heidic_get_directional_light_dir_x(light_index);
+                                        selected_light_dir_y = heidic_get_directional_light_dir_y(light_index);
+                                        selected_light_dir_z = heidic_get_directional_light_dir_z(light_index);
+                                        has_light_selection = 1;
+                                        has_selection = 0;
+                                        has_mesh_selection = 0;
+                                        has_wedge_selection = 0;
+                                        selected_cube_index = -1;
+                                        selected_mesh_instance_id = -1;
+                                    }
+                                }
+                                heidic_imgui_pop_id();
+                            }
+                            light_index = (light_index + 1);
                         }
                     }
                     heidic_imgui_end();
@@ -2641,6 +2865,127 @@ int heidic_main() {
                                 new_rz = 360;
                             }
                             heidic_set_wedge_rotation(selected_wedge_index, current_rx, current_ry, new_rz);
+                        }
+                        heidic_imgui_end();
+                    }
+                }
+                if (((has_light_selection == 1) && (selected_light_id >= 0))) {
+                    if ((heidic_imgui_begin("Transform Control") == 1)) {
+                        float  current_x = heidic_get_directional_light_x(selected_light_id);
+                        float  current_y = heidic_get_directional_light_y(selected_light_id);
+                        float  current_z = heidic_get_directional_light_z(selected_light_id);
+                        float  current_dir_x = heidic_get_directional_light_dir_x(selected_light_id);
+                        float  current_dir_y = heidic_get_directional_light_dir_y(selected_light_id);
+                        float  current_dir_z = heidic_get_directional_light_dir_z(selected_light_id);
+                        heidic_imgui_text("Position:");
+                        float  new_x_slider = heidic_imgui_slider_float("Position X", current_x, -1000, 1000);
+                        float  new_x_input = heidic_imgui_input_float("##LightPosX", current_x, 1, 10);
+                        float  new_x = new_x_slider;
+                        if ((new_x_input != current_x)) {
+                            new_x = new_x_input;
+                        }
+                        if ((new_x != current_x)) {
+                            heidic_set_directional_light_pos(selected_light_id, new_x, current_y, current_z);
+                            selected_light_x = new_x;
+                        }
+                        float  new_y_slider = heidic_imgui_slider_float("Position Y", current_y, -1000, 1000);
+                        float  new_y_input = heidic_imgui_input_float("##LightPosY", current_y, 1, 10);
+                        float  new_y = new_y_slider;
+                        if ((new_y_input != current_y)) {
+                            new_y = new_y_input;
+                        }
+                        if ((new_y != current_y)) {
+                            heidic_set_directional_light_pos(selected_light_id, current_x, new_y, current_z);
+                            selected_light_y = new_y;
+                        }
+                        float  new_z_slider = heidic_imgui_slider_float("Position Z", current_z, -1000, 1000);
+                        float  new_z_input = heidic_imgui_input_float("##LightPosZ", current_z, 1, 10);
+                        float  new_z = new_z_slider;
+                        if ((new_z_input != current_z)) {
+                            new_z = new_z_input;
+                        }
+                        if ((new_z != current_z)) {
+                            heidic_set_directional_light_pos(selected_light_id, current_x, current_y, new_z);
+                            selected_light_z = new_z;
+                        }
+                        heidic_imgui_separator();
+                        heidic_imgui_text("Direction:");
+                        float  new_dir_x_slider = heidic_imgui_slider_float("Direction X", current_dir_x, -1, 1);
+                        float  new_dir_x_input = heidic_imgui_input_float("##LightDirX", current_dir_x, 0.01, 0.1);
+                        float  new_dir_x = new_dir_x_slider;
+                        if ((new_dir_x_input != current_dir_x)) {
+                            new_dir_x = new_dir_x_input;
+                        }
+                        if ((new_dir_x != current_dir_x)) {
+                            heidic_set_directional_light_dir(selected_light_id, new_dir_x, current_dir_y, current_dir_z);
+                            selected_light_dir_x = new_dir_x;
+                        }
+                        float  new_dir_y_slider = heidic_imgui_slider_float("Direction Y", current_dir_y, -1, 1);
+                        float  new_dir_y_input = heidic_imgui_input_float("##LightDirY", current_dir_y, 0.01, 0.1);
+                        float  new_dir_y = new_dir_y_slider;
+                        if ((new_dir_y_input != current_dir_y)) {
+                            new_dir_y = new_dir_y_input;
+                        }
+                        if ((new_dir_y != current_dir_y)) {
+                            heidic_set_directional_light_dir(selected_light_id, current_dir_x, new_dir_y, current_dir_z);
+                            selected_light_dir_y = new_dir_y;
+                        }
+                        float  new_dir_z_slider = heidic_imgui_slider_float("Direction Z", current_dir_z, -1, 1);
+                        float  new_dir_z_input = heidic_imgui_input_float("##LightDirZ", current_dir_z, 0.01, 0.1);
+                        float  new_dir_z = new_dir_z_slider;
+                        if ((new_dir_z_input != current_dir_z)) {
+                            new_dir_z = new_dir_z_input;
+                        }
+                        if ((new_dir_z != current_dir_z)) {
+                            heidic_set_directional_light_dir(selected_light_id, current_dir_x, current_dir_y, new_dir_z);
+                            selected_light_dir_z = new_dir_z;
+                        }
+                        heidic_imgui_separator();
+                        heidic_imgui_text("Color:");
+                        float  current_r = heidic_get_directional_light_r(selected_light_id);
+                        float  current_g = heidic_get_directional_light_g(selected_light_id);
+                        float  current_b = heidic_get_directional_light_b(selected_light_id);
+                        float  new_r_slider = heidic_imgui_slider_float("Color R", current_r, 0, 1);
+                        float  new_r_input = heidic_imgui_input_float("##LightColorR", current_r, 0.01, 0.1);
+                        float  new_r = new_r_slider;
+                        if ((new_r_input != current_r)) {
+                            new_r = new_r_input;
+                        }
+                        if ((new_r != current_r)) {
+                            heidic_set_directional_light_color(selected_light_id, new_r, current_g, current_b);
+                        }
+                        float  new_g_slider = heidic_imgui_slider_float("Color G", current_g, 0, 1);
+                        float  new_g_input = heidic_imgui_input_float("##LightColorG", current_g, 0.01, 0.1);
+                        float  new_g = new_g_slider;
+                        if ((new_g_input != current_g)) {
+                            new_g = new_g_input;
+                        }
+                        if ((new_g != current_g)) {
+                            heidic_set_directional_light_color(selected_light_id, current_r, new_g, current_b);
+                        }
+                        float  new_b_slider = heidic_imgui_slider_float("Color B", current_b, 0, 1);
+                        float  new_b_input = heidic_imgui_input_float("##LightColorB", current_b, 0.01, 0.1);
+                        float  new_b = new_b_slider;
+                        if ((new_b_input != current_b)) {
+                            new_b = new_b_input;
+                        }
+                        if ((new_b != current_b)) {
+                            heidic_set_directional_light_color(selected_light_id, current_r, current_g, new_b);
+                        }
+                        heidic_imgui_separator();
+                        heidic_imgui_text("Intensity:");
+                        float  current_intensity = heidic_get_directional_light_intensity(selected_light_id);
+                        float  new_intensity_slider = heidic_imgui_slider_float("Intensity", current_intensity, 0, 5);
+                        float  new_intensity_input = heidic_imgui_input_float("##LightIntensity", current_intensity, 0.1, 1);
+                        float  new_intensity = new_intensity_slider;
+                        if ((new_intensity_input != current_intensity)) {
+                            new_intensity = new_intensity_input;
+                        }
+                        if ((new_intensity != current_intensity)) {
+                            if ((new_intensity < 0)) {
+                                new_intensity = 0;
+                            }
+                            heidic_set_directional_light_intensity(selected_light_id, new_intensity);
                         }
                         heidic_imgui_end();
                     }

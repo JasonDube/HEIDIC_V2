@@ -25,12 +25,60 @@ fn main(): void {
     let default_ini_path_load: string = "";
     heidic_imgui_load_layout(default_ini_path_load);
     
+    // Auto-load a model and light at startup for faster iteration
+    print("Auto-loading model and light at startup...\n");
+    // Path is relative to project root (executable runs from examples/gateway_editor_v1/)
+    let auto_model_path: string = "../../models/eve_1.obj";
+    let auto_mesh_id: i32 = heidic_load_obj_mesh(auto_model_path);
+    if auto_mesh_id >= 0 {
+        print("Auto-loaded model: ");
+        print(auto_model_path);
+        print(" (ID: ");
+        print(auto_mesh_id);
+        print(")\n");
+        
+        // Try to auto-load texture if it exists
+        let auto_texture_path: string = "../../models/Textures/eve_tex.png";
+        heidic_set_mesh_instance_texture(auto_mesh_id, auto_texture_path);
+    } else {
+        print("Failed to auto-load model, continuing anyway...\n");
+    }
+    
+    // Create a directional light pointing at the model
+    // Position light above the model, pointing down
+    let light_x: f32 = 0.0;
+    let light_y: f32 = 500.0; // 5 meters above
+    let light_z: f32 = 0.0;
+    let light_dir_x: f32 = 0.0;
+    let light_dir_y: f32 = -1.0; // Pointing down
+    let light_dir_z: f32 = 0.0;
+    let auto_light_id: i32 = heidic_create_directional_light(light_x, light_y, light_z, light_dir_x, light_dir_y, light_dir_z);
+    if auto_light_id >= 0 {
+        print("Auto-created directional light (ID: ");
+        print(auto_light_id);
+        print(") at (");
+        print(light_x);
+        print(", ");
+        print(light_y);
+        print(", ");
+        print(light_z);
+        print(") pointing (");
+        print(light_dir_x);
+        print(", ");
+        print(light_dir_y);
+        print(", ");
+        print(light_dir_z);
+        print(")\n");
+    } else {
+        print("Failed to auto-create light, continuing anyway...\n");
+    }
+    
     // Start in windowed mode (1 = windowed)
     // Video mode: 0 = fullscreen, 1 = windowed
     
     // Player (Cube) Transform - using Vec3 for position and rotation
-    // Spawn player away from the reference cubes (3000 units = 30 meters away)
-    let player_pos: Vec3 = heidic_vec3(3000.0, 100.0, 3000.0); // 30m away, 1m above ground
+    // Spawn player at (100, 100, 100) - camera will be at (100, 200, 100)
+    let player_pos: Vec3 = heidic_vec3(100.0, 100.0, 100.0);
     let player_rot: Vec3 = heidic_vec3(0.0, 0.0, 0.0);
     
     // Camera Transform - will follow player with offset
@@ -53,6 +101,9 @@ fn main(): void {
     
     // Movement Speed (cm per frame)
     let move_speed: f32 = 15.0; // Increased from 5.0 for faster movement
+    let slow_speed_mode: i32 = 0; // 0 = normal speed, 1 = slow speed
+    let normal_speed: f32 = 15.0;
+    let slow_speed: f32 = 1.0; // Very slow for detailed inspection
     
     // Rotation Speed (degrees per frame) - for Q/E keys (optional, mouse look is primary)
     let rot_speed: f32 = 2.0;
@@ -114,6 +165,16 @@ fn main(): void {
     let selected_wedge_y: f32 = 0.0;
     let selected_wedge_z: f32 = 0.0;
     let selected_wedge_sx: f32 = 0.0;
+    
+    // Light selection state
+    let selected_light_id: i32 = -1; // -1 = none, >= 0 = light ID
+    let selected_light_x: f32 = 0.0;
+    let selected_light_y: f32 = 0.0;
+    let selected_light_z: f32 = 0.0;
+    let selected_light_dir_x: f32 = 0.0;
+    let selected_light_dir_y: f32 = 0.0;
+    let selected_light_dir_z: f32 = 0.0;
+    let has_light_selection: i32 = 0; // 0 = no light selection, 1 = has light selection
     let selected_wedge_sy: f32 = 0.0;
     let selected_wedge_sz: f32 = 0.0;
     let has_wedge_selection: i32 = 0; // 0 = no wedge selection, 1 = has wedge selection
@@ -129,10 +190,11 @@ fn main(): void {
     let delete_was_pressed: i32 = 0;
     let key_0_was_pressed: i32 = 0;  // Key '0' for wedge creation (deprecated - now use build mode)
     
-    // Build mode: 0 = cube mode, 1 = wedge mode
+    // Build mode: 0 = cube mode, 1 = wedge mode, 2 = light mode
     let build_mode: i32 = 0; // Default to cube mode
     let key_1_was_pressed: i32 = 0; // Key '1' to switch to cube mode
     let key_2_was_pressed: i32 = 0; // Key '2' to switch to wedge mode
+    let key_3_was_pressed: i32 = 0; // Key '3' to switch to light mode
     
     // Wedge preview rotation (0-11, cycling through 12 custom orientations)
     // Custom rotation values for each position:
@@ -201,14 +263,23 @@ fn main(): void {
             ray_dir = heidic_get_mouse_ray_dir(window);
         }
         
-        // ESC always works (to close window)
+        // ESC: Exit from build mode to selection mode (or stop editing)
         if heidic_is_key_pressed(window, 256) == 1 { // ESC
-            // If editing, stop editing instead of closing window
+            // If editing, stop editing
             if is_editing_combination >= 0 {
                 heidic_stop_editing_combination_name();
             } else {
-                heidic_set_window_should_close(window, 1);
+                if mouse_mode == 0 {
+                    // In build mode: switch to selection mode
+                    mouse_mode = 1;
+                    heidic_set_cursor_mode(window, 0); // 0 = normal (visible cursor)
+                }
             }
+        }
+        
+        // F12: Exit the editor
+        if heidic_is_key_pressed(window, 301) == 1 { // F12
+            heidic_set_window_should_close(window, 1);
         }
         
         // Alt + Mouse Drag dolly functionality has been removed/deprecated
@@ -295,6 +366,17 @@ fn main(): void {
             key_2_was_pressed = 1;
         } else {
             key_2_was_pressed = 0;
+        }
+        
+        let key_3_pressed: i32 = heidic_is_key_pressed(window, 51); // ASCII '3'
+        if key_3_pressed == 1 {
+            if key_3_was_pressed == 0 {
+                build_mode = 2; // Switch to light mode
+                print("Build mode: Light\n");
+            }
+            key_3_was_pressed = 1;
+        } else {
+            key_3_was_pressed = 0;
         }
         
         // Mouse wheel rotation for wedge preview (only in wedge mode)
@@ -576,27 +658,38 @@ fn main(): void {
                     block_index = heidic_create_cube_with_color(create_pos.x, create_pos.y, create_pos.z, default_cube_size, default_cube_size, default_cube_size, block_r, block_g, block_b);
                     print("Created cube at index: ");
                 } else {
-                    // Wedge mode: create wedge with rotation
-                    // Custom rotation values for each of the 12 positions
-                    let wedge_rot_x: f32 = 0.0;
-                    let wedge_rot_y: f32 = 0.0;
-                    let wedge_rot_z: f32 = 0.0;
-                    
-                    if wedge_preview_rotation == 0 {
-                        wedge_rot_x = 270.0;
-                        wedge_rot_y = 180.0;
-                        wedge_rot_z = 90.0;
+                    if build_mode == 2 {
+                        // Light mode: create directional light
+                        // Default direction: down (-Y)
+                        let light_dir_x: f32 = 0.0;
+                        let light_dir_y: f32 = -1.0;
+                        let light_dir_z: f32 = 0.0;
+                        let light_id: i32 = heidic_create_directional_light(create_pos.x, create_pos.y, create_pos.z, light_dir_x, light_dir_y, light_dir_z);
+                        print("Created directional light at index: ");
+                        print(light_id);
+                        print("\n");
                     } else {
-                        if wedge_preview_rotation == 1 {
-                            wedge_rot_x = 180.0;
-                            wedge_rot_y = 90.0;
-                            wedge_rot_z = 270.0;
+                        // Wedge mode: create wedge with rotation
+                        // Custom rotation values for each of the 12 positions
+                        let wedge_rot_x: f32 = 0.0;
+                        let wedge_rot_y: f32 = 0.0;
+                        let wedge_rot_z: f32 = 0.0;
+                        
+                        if wedge_preview_rotation == 0 {
+                            wedge_rot_x = 270.0;
+                            wedge_rot_y = 180.0;
+                            wedge_rot_z = 90.0;
                         } else {
-                            if wedge_preview_rotation == 2 {
-                                wedge_rot_x = 90.0;
-                                wedge_rot_y = 270.0;
-                                wedge_rot_z = 180.0;
+                            if wedge_preview_rotation == 1 {
+                                wedge_rot_x = 180.0;
+                                wedge_rot_y = 90.0;
+                                wedge_rot_z = 270.0;
                             } else {
+                                if wedge_preview_rotation == 2 {
+                                    wedge_rot_x = 90.0;
+                                    wedge_rot_y = 270.0;
+                                    wedge_rot_z = 180.0;
+                                } else {
                                 if wedge_preview_rotation == 3 {
                                     wedge_rot_x = 180.0;
                                     wedge_rot_y = 0.0;
@@ -649,15 +742,16 @@ fn main(): void {
                                             }
                                         }
                                     }
+                                    }
                                 }
                             }
                         }
+                        
+                        block_index = heidic_create_wedge_with_color(create_pos.x, create_pos.y, create_pos.z, default_cube_size, default_cube_size, default_cube_size, block_r, block_g, block_b);
+                        // Set the wedge rotation
+                        heidic_set_wedge_rotation(block_index, wedge_rot_x, wedge_rot_y, wedge_rot_z);
+                        print("Created wedge at index: ");
                     }
-                    
-                    block_index = heidic_create_wedge_with_color(create_pos.x, create_pos.y, create_pos.z, default_cube_size, default_cube_size, default_cube_size, block_r, block_g, block_b);
-                    // Set the wedge rotation
-                    heidic_set_wedge_rotation(block_index, wedge_rot_x, wedge_rot_y, wedge_rot_z);
-                    print("Created wedge at index: ");
                 }
                 
                 if block_index >= 0 {
@@ -1035,8 +1129,16 @@ fn main(): void {
         
         // Toolbar/Shelf - Fixed toolbar underneath menu bar
         if heidic_imgui_begin_toolbar() == 1 {
-            // User can add buttons/widgets here
-            // They will be inside the child window, positioned at x=10
+            // Slow speed toggle button (10x10 pixels)
+            if heidic_imgui_button_sized("S", 10.0, 10.0) == 1 {
+                slow_speed_mode = 1 - slow_speed_mode; // Toggle
+            }
+            // Update move speed based on mode
+            if slow_speed_mode == 1 {
+                move_speed = slow_speed;
+            } else {
+                move_speed = normal_speed;
+            }
             heidic_imgui_end_toolbar();
         }
         
@@ -1276,6 +1378,9 @@ fn main(): void {
         } else {
             // print("[HEIDIC DEBUG] mesh_instance_count is 0, skipping mesh instance drawing\n");  // Debug: uncomment when needed
         }
+        
+        // Draw all directional lights as arrows
+        heidic_draw_all_directional_lights();
         
         // print("[HEIDIC DEBUG] Before raycasting section\n");  // Debug: uncomment when needed
         // ============================================================================
@@ -2056,6 +2161,34 @@ fn main(): void {
                 }
             }
         }
+        
+        // Show light selection and Gizmo (position only, no scale/rotation)
+        if has_light_selection == 1 && selected_light_id >= 0 {
+            // Refresh cached position values from light (in case they were updated via input fields)
+            selected_light_x = heidic_get_directional_light_x(selected_light_id);
+            selected_light_y = heidic_get_directional_light_y(selected_light_id);
+            selected_light_z = heidic_get_directional_light_z(selected_light_id);
+            
+            // Translation gizmo: Move selected light (always call to draw gizmo, even when not interacting)
+            let new_light_pos: Vec3 = heidic_gizmo_translate(window, selected_light_x, selected_light_y, selected_light_z);
+            
+            // Check if gizmo is being interacted with
+            let translate_interacting: i32 = heidic_gizmo_is_interacting();
+            
+            // Update position if gizmo moved (always update, not just when dragging)
+            // This ensures the light position stays in sync with the gizmo
+            if new_light_pos.x != selected_light_x || new_light_pos.y != selected_light_y || new_light_pos.z != selected_light_z {
+                // Update selected light position
+                selected_light_x = new_light_pos.x;
+                selected_light_y = new_light_pos.y;
+                selected_light_z = new_light_pos.z;
+                
+                // Update light position (only if actually interacting to avoid constant updates)
+                if translate_interacting == 1 {
+                    heidic_set_directional_light_pos(selected_light_id, selected_light_x, selected_light_y, selected_light_z);
+                }
+            }
+        }
         // print("[HEIDIC DEBUG] End of raycasting section\n");  // Debug: uncomment when needed
         
         // print("[HEIDIC DEBUG] Before Codex Of Forms check (after all drawing)\n");  // Debug: uncomment when needed
@@ -2305,6 +2438,58 @@ fn main(): void {
                     }
                 }
                 
+                // Show lights in outliner
+                let light_total_count: i32 = heidic_get_directional_light_total_count();
+                if light_total_count > 0 {
+                    heidic_imgui_separator();
+                    heidic_imgui_text("Lights:");
+                    
+                    let light_index: i32 = 0;
+                    while light_index < light_total_count {
+                        if heidic_get_directional_light_active(light_index) == 1 {
+                            heidic_imgui_push_id(light_index + 30000);  // Offset to avoid conflicts
+                            
+                            let light_name: string = heidic_format_light_name(light_index);
+                            
+                            // Make light name clickable to toggle selection
+                            let is_light_selected: i32 = heidic_is_light_selected(light_index);
+                            
+                            // Always use selectable so it's clickable whether selected or not
+                            if heidic_imgui_selectable_str(light_name) == 1 {
+                                if is_light_selected == 1 {
+                                    // Already selected: clicking again deselects it
+                                    heidic_clear_light_selection();
+                                    has_light_selection = 0;
+                                    selected_light_id = -1;
+                                } else {
+                                    // Not selected: clicking selects it
+                                    heidic_clear_selection();
+                                    heidic_clear_mesh_selection();
+                                    selected_wedge_index = -1;
+                                    heidic_clear_light_selection();
+                                    heidic_add_light_to_selection(light_index);
+                                    selected_light_id = light_index;
+                                    selected_light_x = heidic_get_directional_light_x(light_index);
+                                    selected_light_y = heidic_get_directional_light_y(light_index);
+                                    selected_light_z = heidic_get_directional_light_z(light_index);
+                                    selected_light_dir_x = heidic_get_directional_light_dir_x(light_index);
+                                    selected_light_dir_y = heidic_get_directional_light_dir_y(light_index);
+                                    selected_light_dir_z = heidic_get_directional_light_dir_z(light_index);
+                                    has_light_selection = 1;
+                                    has_selection = 0;  // Clear cube selection
+                                    has_mesh_selection = 0;  // Clear mesh selection
+                                    has_wedge_selection = 0;  // Clear wedge selection
+                                    selected_cube_index = -1.0;
+                                    selected_mesh_instance_id = -1;
+                                }
+                            }
+                            
+                            heidic_imgui_pop_id();
+                        }
+                        light_index = light_index + 1;
+                    }
+                }
+                
                 heidic_imgui_end();
             }
             
@@ -2526,6 +2711,158 @@ fn main(): void {
                             new_rz = 360.0;
                         }
                         heidic_set_wedge_rotation(selected_wedge_index, current_rx, current_ry, new_rz);
+                    }
+                    
+                    heidic_imgui_end();
+                }
+            }
+            
+            // Transform Control Window for Selected Light
+            if has_light_selection == 1 && selected_light_id >= 0 {
+                if heidic_imgui_begin("Transform Control") == 1 {
+                    // Get current transform values
+                    let current_x: f32 = heidic_get_directional_light_x(selected_light_id);
+                    let current_y: f32 = heidic_get_directional_light_y(selected_light_id);
+                    let current_z: f32 = heidic_get_directional_light_z(selected_light_id);
+                    let current_dir_x: f32 = heidic_get_directional_light_dir_x(selected_light_id);
+                    let current_dir_y: f32 = heidic_get_directional_light_dir_y(selected_light_id);
+                    let current_dir_z: f32 = heidic_get_directional_light_dir_z(selected_light_id);
+                    
+                    // Position - Slider and Input (both work independently)
+                    heidic_imgui_text("Position:");
+                    // X Position - Slider and Input
+                    let new_x_slider: f32 = heidic_imgui_slider_float("Position X", current_x, -1000.0, 1000.0);
+                    let new_x_input: f32 = heidic_imgui_input_float("##LightPosX", current_x, 1.0, 10.0);
+                    let new_x: f32 = new_x_slider;
+                    if new_x_input != current_x {
+                        new_x = new_x_input;
+                    }
+                    if new_x != current_x {
+                        heidic_set_directional_light_pos(selected_light_id, new_x, current_y, current_z);
+                        selected_light_x = new_x;
+                    }
+                    
+                    // Y Position - Slider and Input
+                    let new_y_slider: f32 = heidic_imgui_slider_float("Position Y", current_y, -1000.0, 1000.0);
+                    let new_y_input: f32 = heidic_imgui_input_float("##LightPosY", current_y, 1.0, 10.0);
+                    let new_y: f32 = new_y_slider;
+                    if new_y_input != current_y {
+                        new_y = new_y_input;
+                    }
+                    if new_y != current_y {
+                        heidic_set_directional_light_pos(selected_light_id, current_x, new_y, current_z);
+                        selected_light_y = new_y;
+                    }
+                    
+                    // Z Position - Slider and Input
+                    let new_z_slider: f32 = heidic_imgui_slider_float("Position Z", current_z, -1000.0, 1000.0);
+                    let new_z_input: f32 = heidic_imgui_input_float("##LightPosZ", current_z, 1.0, 10.0);
+                    let new_z: f32 = new_z_slider;
+                    if new_z_input != current_z {
+                        new_z = new_z_input;
+                    }
+                    if new_z != current_z {
+                        heidic_set_directional_light_pos(selected_light_id, current_x, current_y, new_z);
+                        selected_light_z = new_z;
+                    }
+                    
+                    heidic_imgui_separator();
+                    
+                    // Direction - Slider and Input (both work independently)
+                    heidic_imgui_text("Direction:");
+                    // X Direction - Slider and Input
+                    let new_dir_x_slider: f32 = heidic_imgui_slider_float("Direction X", current_dir_x, -1.0, 1.0);
+                    let new_dir_x_input: f32 = heidic_imgui_input_float("##LightDirX", current_dir_x, 0.01, 0.1);
+                    let new_dir_x: f32 = new_dir_x_slider;
+                    if new_dir_x_input != current_dir_x {
+                        new_dir_x = new_dir_x_input;
+                    }
+                    if new_dir_x != current_dir_x {
+                        heidic_set_directional_light_dir(selected_light_id, new_dir_x, current_dir_y, current_dir_z);
+                        selected_light_dir_x = new_dir_x;
+                    }
+                    
+                    // Y Direction - Slider and Input
+                    let new_dir_y_slider: f32 = heidic_imgui_slider_float("Direction Y", current_dir_y, -1.0, 1.0);
+                    let new_dir_y_input: f32 = heidic_imgui_input_float("##LightDirY", current_dir_y, 0.01, 0.1);
+                    let new_dir_y: f32 = new_dir_y_slider;
+                    if new_dir_y_input != current_dir_y {
+                        new_dir_y = new_dir_y_input;
+                    }
+                    if new_dir_y != current_dir_y {
+                        heidic_set_directional_light_dir(selected_light_id, current_dir_x, new_dir_y, current_dir_z);
+                        selected_light_dir_y = new_dir_y;
+                    }
+                    
+                    // Z Direction - Slider and Input
+                    let new_dir_z_slider: f32 = heidic_imgui_slider_float("Direction Z", current_dir_z, -1.0, 1.0);
+                    let new_dir_z_input: f32 = heidic_imgui_input_float("##LightDirZ", current_dir_z, 0.01, 0.1);
+                    let new_dir_z: f32 = new_dir_z_slider;
+                    if new_dir_z_input != current_dir_z {
+                        new_dir_z = new_dir_z_input;
+                    }
+                    if new_dir_z != current_dir_z {
+                        heidic_set_directional_light_dir(selected_light_id, current_dir_x, current_dir_y, new_dir_z);
+                        selected_light_dir_z = new_dir_z;
+                    }
+                    
+                    heidic_imgui_separator();
+                    
+                    // Color Controls
+                    heidic_imgui_text("Color:");
+                    let current_r: f32 = heidic_get_directional_light_r(selected_light_id);
+                    let current_g: f32 = heidic_get_directional_light_g(selected_light_id);
+                    let current_b: f32 = heidic_get_directional_light_b(selected_light_id);
+                    
+                    // R Color - Slider and Input
+                    let new_r_slider: f32 = heidic_imgui_slider_float("Color R", current_r, 0.0, 1.0);
+                    let new_r_input: f32 = heidic_imgui_input_float("##LightColorR", current_r, 0.01, 0.1);
+                    let new_r: f32 = new_r_slider;
+                    if new_r_input != current_r {
+                        new_r = new_r_input;
+                    }
+                    if new_r != current_r {
+                        heidic_set_directional_light_color(selected_light_id, new_r, current_g, current_b);
+                    }
+                    
+                    // G Color - Slider and Input
+                    let new_g_slider: f32 = heidic_imgui_slider_float("Color G", current_g, 0.0, 1.0);
+                    let new_g_input: f32 = heidic_imgui_input_float("##LightColorG", current_g, 0.01, 0.1);
+                    let new_g: f32 = new_g_slider;
+                    if new_g_input != current_g {
+                        new_g = new_g_input;
+                    }
+                    if new_g != current_g {
+                        heidic_set_directional_light_color(selected_light_id, current_r, new_g, current_b);
+                    }
+                    
+                    // B Color - Slider and Input
+                    let new_b_slider: f32 = heidic_imgui_slider_float("Color B", current_b, 0.0, 1.0);
+                    let new_b_input: f32 = heidic_imgui_input_float("##LightColorB", current_b, 0.01, 0.1);
+                    let new_b: f32 = new_b_slider;
+                    if new_b_input != current_b {
+                        new_b = new_b_input;
+                    }
+                    if new_b != current_b {
+                        heidic_set_directional_light_color(selected_light_id, current_r, current_g, new_b);
+                    }
+                    
+                    heidic_imgui_separator();
+                    
+                    // Intensity Control
+                    heidic_imgui_text("Intensity:");
+                    let current_intensity: f32 = heidic_get_directional_light_intensity(selected_light_id);
+                    let new_intensity_slider: f32 = heidic_imgui_slider_float("Intensity", current_intensity, 0.0, 5.0);
+                    let new_intensity_input: f32 = heidic_imgui_input_float("##LightIntensity", current_intensity, 0.1, 1.0);
+                    let new_intensity: f32 = new_intensity_slider;
+                    if new_intensity_input != current_intensity {
+                        new_intensity = new_intensity_input;
+                    }
+                    if new_intensity != current_intensity {
+                        if new_intensity < 0.0 {
+                            new_intensity = 0.0;
+                        }
+                        heidic_set_directional_light_intensity(selected_light_id, new_intensity);
                     }
                     
                     heidic_imgui_end();
