@@ -262,6 +262,9 @@ extern "C" {
     int32_t heidic_get_mesh_instance_active(int32_t instance_id);
 }
 extern "C" {
+    void heidic_delete_mesh_instance(int32_t instance_id);
+}
+extern "C" {
     void heidic_clear_mesh_selection();
 }
 extern "C" {
@@ -394,6 +397,9 @@ extern "C" {
     int32_t heidic_imgui_menu_item(const char* label);
 }
 extern "C" {
+    int32_t heidic_imgui_menu_item_toggle(const char* label, int32_t selected);
+}
+extern "C" {
     void heidic_imgui_separator();
 }
 extern "C" {
@@ -446,6 +452,18 @@ extern "C" {
 }
 extern "C" {
     const char* heidic_get_mesh_texture_input_buffer(int32_t instance_id);
+}
+extern "C" {
+    int32_t heidic_imgui_input_text_mesh_heidic_function(int32_t instance_id);
+}
+extern "C" {
+    const char* heidic_get_mesh_heidic_function_input_buffer(int32_t instance_id);
+}
+extern "C" {
+    int32_t heidic_set_mesh_instance_heidic_function(int32_t instance_id, const char* function_name);
+}
+extern "C" {
+    const char* heidic_get_mesh_instance_heidic_function(int32_t instance_id);
 }
 extern "C" {
     int32_t heidic_save_level_str_wrapper(const char* filepath);
@@ -760,6 +778,12 @@ extern "C" {
     int32_t heidic_create_directional_light(float x, float y, float z, float dir_x, float dir_y, float dir_z);
 }
 extern "C" {
+    int32_t heidic_create_point_light(float x, float y, float z, float r, float g, float b, float intensity, float range);
+}
+extern "C" {
+    int32_t heidic_create_spot_light(float x, float y, float z, float dir_x, float dir_y, float dir_z, float r, float g, float b, float intensity, float range, float innerCone, float outerCone);
+}
+extern "C" {
     int32_t heidic_get_directional_light_count();
 }
 extern "C" {
@@ -787,6 +811,9 @@ extern "C" {
     int32_t heidic_get_directional_light_active(int32_t light_id);
 }
 extern "C" {
+    void heidic_delete_light(int32_t light_id);
+}
+extern "C" {
     void heidic_set_directional_light_pos(int32_t light_id, float x, float y, float z);
 }
 extern "C" {
@@ -811,10 +838,19 @@ extern "C" {
     void heidic_set_directional_light_intensity(int32_t light_id, float intensity);
 }
 extern "C" {
+    float heidic_get_light_range(int32_t light_id);
+}
+extern "C" {
+    void heidic_set_light_range(int32_t light_id, float range);
+}
+extern "C" {
     const char* heidic_format_light_name(int32_t light_id);
 }
 extern "C" {
     void heidic_draw_all_directional_lights();
+}
+extern "C" {
+    void heidic_draw_spot_light_cone(float x, float y, float z, float dir_x, float dir_y, float dir_z, float range, float outerCone, float r, float g, float b);
 }
 extern "C" {
     void heidic_clear_light_selection();
@@ -952,7 +988,20 @@ extern "C" {
     int32_t heidic_is_combination_expanded(int32_t combination_id);
 }
 
+void rotate_me(int32_t mesh_instance_id);
 int heidic_main();
+
+void rotate_me(int32_t mesh_instance_id) {
+        float  current_rx = heidic_get_mesh_instance_rx(mesh_instance_id);
+        float  current_ry = heidic_get_mesh_instance_ry(mesh_instance_id);
+        float  current_rz = heidic_get_mesh_instance_rz(mesh_instance_id);
+        float  rotation_speed = 1;
+        float  new_ry = (current_ry + rotation_speed);
+        if ((new_ry >= 360)) {
+            new_ry = (new_ry - 360);
+        }
+        heidic_set_mesh_instance_rotation(mesh_instance_id, current_rx, new_ry, current_rz);
+}
 
 int heidic_main() {
         int32_t  VISIBLE = 1;
@@ -962,7 +1011,7 @@ int heidic_main() {
             return 0;
         }
         heidic_glfw_vulkan_hints();
-        GLFWwindow*  window = heidic_create_window(1280, 720, "EDEN ENGINE - Gateway Editor v1");
+        GLFWwindow*  window = heidic_create_window(1300, 700, "EDEN ENGINE - Gateway Editor v1");
         if ((heidic_init_renderer(window) == 0)) {
             heidic_glfw_terminate();
             return 0;
@@ -1072,6 +1121,10 @@ int heidic_main() {
         float  selected_wedge_sy = 0;
         float  selected_wedge_sz = 0;
         int32_t  has_wedge_selection = 0;
+        int32_t  show_codex_window = 1;
+        int32_t  show_texture_swatches_window = 1;
+        int32_t  show_uv_editor_window = 1;
+        int32_t  show_performance_info_window = 1;
         int32_t  is_grounded = 0;
         int32_t  mouse_left_was_pressed = 0;
         int32_t  mouse_middle_was_pressed = 0;
@@ -1081,6 +1134,8 @@ int heidic_main() {
         int32_t  key_1_was_pressed = 0;
         int32_t  key_2_was_pressed = 0;
         int32_t  key_3_was_pressed = 0;
+        int32_t  key_4_was_pressed = 0;
+        int32_t  key_5_was_pressed = 0;
         int32_t  wedge_preview_rotation = 0;
         int32_t  last_wedge_preview_rotation = -1;
         int32_t  combine_c_was_pressed = 0;
@@ -1187,11 +1242,31 @@ int heidic_main() {
                 if ((key_3_pressed == 1)) {
                     if ((key_3_was_pressed == 0)) {
                         build_mode = 2;
-                        std::cout << "Build mode: Light\n" << std::endl;
+                        std::cout << "Build mode: Directional Light\n" << std::endl;
                     }
                     key_3_was_pressed = 1;
                 } else {
                     key_3_was_pressed = 0;
+                }
+                int32_t  key_4_pressed = heidic_is_key_pressed(window, 52);
+                if ((key_4_pressed == 1)) {
+                    if ((key_4_was_pressed == 0)) {
+                        build_mode = 3;
+                        std::cout << "Build mode: Point Light\n" << std::endl;
+                    }
+                    key_4_was_pressed = 1;
+                } else {
+                    key_4_was_pressed = 0;
+                }
+                int32_t  key_5_pressed = heidic_is_key_pressed(window, 53);
+                if ((key_5_pressed == 1)) {
+                    if ((key_5_was_pressed == 0)) {
+                        build_mode = 4;
+                        std::cout << "Build mode: Spot Light\n" << std::endl;
+                    }
+                    key_5_was_pressed = 1;
+                } else {
+                    key_5_was_pressed = 0;
                 }
                 if ((build_mode == 1)) {
                     float  mouse_scroll = heidic_get_mouse_scroll_y(window);
@@ -1419,68 +1494,97 @@ int heidic_main() {
                                 std::cout << light_id << std::endl;
                                 std::cout << "\n" << std::endl;
                             } else {
-                                float  wedge_rot_x = 0;
-                                float  wedge_rot_y = 0;
-                                float  wedge_rot_z = 0;
-                                if ((wedge_preview_rotation == 0)) {
-                                    wedge_rot_x = 270;
-                                    wedge_rot_y = 180;
-                                    wedge_rot_z = 90;
+                                if ((build_mode == 3)) {
+                                    float  light_r = 1;
+                                    float  light_g = 1;
+                                    float  light_b = 1;
+                                    float  light_intensity = 1;
+                                    float  light_range = 1000;
+                                    int32_t  light_id = heidic_create_point_light(create_pos.x, create_pos.y, create_pos.z, light_r, light_g, light_b, light_intensity, light_range);
+                                    std::cout << "Created point light at index: " << std::endl;
+                                    std::cout << light_id << std::endl;
+                                    std::cout << "\n" << std::endl;
                                 } else {
-                                    if ((wedge_preview_rotation == 1)) {
-                                        wedge_rot_x = 180;
-                                        wedge_rot_y = 90;
-                                        wedge_rot_z = 270;
+                                    if ((build_mode == 4)) {
+                                        float  light_r = 1;
+                                        float  light_g = 1;
+                                        float  light_b = 1;
+                                        float  light_intensity = 1;
+                                        float  light_range = 200;
+                                        float  dir_x = 0;
+                                        float  dir_y = -1;
+                                        float  dir_z = 0;
+                                        float  inner_cone = 0;
+                                        float  outer_cone = 0.785;
+                                        int32_t  light_id = heidic_create_spot_light(create_pos.x, create_pos.y, create_pos.z, dir_x, dir_y, dir_z, light_r, light_g, light_b, light_intensity, light_range, inner_cone, outer_cone);
+                                        std::cout << "Created spot light at index: " << std::endl;
+                                        std::cout << light_id << std::endl;
+                                        std::cout << "\n" << std::endl;
                                     } else {
-                                        if ((wedge_preview_rotation == 2)) {
-                                            wedge_rot_x = 90;
-                                            wedge_rot_y = 270;
-                                            wedge_rot_z = 180;
+                                        float  wedge_rot_x = 0;
+                                        float  wedge_rot_y = 0;
+                                        float  wedge_rot_z = 0;
+                                        if ((wedge_preview_rotation == 0)) {
+                                            wedge_rot_x = 270;
+                                            wedge_rot_y = 180;
+                                            wedge_rot_z = 90;
                                         } else {
-                                            if ((wedge_preview_rotation == 3)) {
+                                            if ((wedge_preview_rotation == 1)) {
                                                 wedge_rot_x = 180;
-                                                wedge_rot_y = 0;
+                                                wedge_rot_y = 90;
                                                 wedge_rot_z = 270;
                                             } else {
-                                                if ((wedge_preview_rotation == 4)) {
-                                                    wedge_rot_x = 180;
-                                                    wedge_rot_y = 180;
-                                                    wedge_rot_z = 90;
+                                                if ((wedge_preview_rotation == 2)) {
+                                                    wedge_rot_x = 90;
+                                                    wedge_rot_y = 270;
+                                                    wedge_rot_z = 180;
                                                 } else {
-                                                    if ((wedge_preview_rotation == 5)) {
+                                                    if ((wedge_preview_rotation == 3)) {
                                                         wedge_rot_x = 180;
-                                                        wedge_rot_y = 90;
-                                                        wedge_rot_z = 90;
+                                                        wedge_rot_y = 0;
+                                                        wedge_rot_z = 270;
                                                     } else {
-                                                        if ((wedge_preview_rotation == 6)) {
+                                                        if ((wedge_preview_rotation == 4)) {
                                                             wedge_rot_x = 180;
-                                                            wedge_rot_y = 270;
+                                                            wedge_rot_y = 180;
                                                             wedge_rot_z = 90;
                                                         } else {
-                                                            if ((wedge_preview_rotation == 7)) {
+                                                            if ((wedge_preview_rotation == 5)) {
                                                                 wedge_rot_x = 180;
-                                                                wedge_rot_y = 0;
+                                                                wedge_rot_y = 90;
                                                                 wedge_rot_z = 90;
                                                             } else {
-                                                                if ((wedge_preview_rotation == 8)) {
+                                                                if ((wedge_preview_rotation == 6)) {
                                                                     wedge_rot_x = 180;
-                                                                    wedge_rot_y = 90;
-                                                                    wedge_rot_z = 180;
+                                                                    wedge_rot_y = 270;
+                                                                    wedge_rot_z = 90;
                                                                 } else {
-                                                                    if ((wedge_preview_rotation == 9)) {
-                                                                        wedge_rot_x = 90;
-                                                                        wedge_rot_y = 270;
-                                                                        wedge_rot_z = 270;
+                                                                    if ((wedge_preview_rotation == 7)) {
+                                                                        wedge_rot_x = 180;
+                                                                        wedge_rot_y = 0;
+                                                                        wedge_rot_z = 90;
                                                                     } else {
-                                                                        if ((wedge_preview_rotation == 10)) {
-                                                                            wedge_rot_x = 90;
-                                                                            wedge_rot_y = 270;
-                                                                            wedge_rot_z = 90;
+                                                                        if ((wedge_preview_rotation == 8)) {
+                                                                            wedge_rot_x = 180;
+                                                                            wedge_rot_y = 90;
+                                                                            wedge_rot_z = 180;
                                                                         } else {
-                                                                            if ((wedge_preview_rotation == 11)) {
-                                                                                wedge_rot_x = 180;
-                                                                                wedge_rot_y = 0;
-                                                                                wedge_rot_z = 180;
+                                                                            if ((wedge_preview_rotation == 9)) {
+                                                                                wedge_rot_x = 90;
+                                                                                wedge_rot_y = 270;
+                                                                                wedge_rot_z = 270;
+                                                                            } else {
+                                                                                if ((wedge_preview_rotation == 10)) {
+                                                                                    wedge_rot_x = 90;
+                                                                                    wedge_rot_y = 270;
+                                                                                    wedge_rot_z = 90;
+                                                                                } else {
+                                                                                    if ((wedge_preview_rotation == 11)) {
+                                                                                        wedge_rot_x = 180;
+                                                                                        wedge_rot_y = 0;
+                                                                                        wedge_rot_z = 180;
+                                                                                    }
+                                                                                }
                                                                             }
                                                                         }
                                                                     }
@@ -1491,11 +1595,11 @@ int heidic_main() {
                                                 }
                                             }
                                         }
+                                        block_index = heidic_create_wedge_with_color(create_pos.x, create_pos.y, create_pos.z, default_cube_size, default_cube_size, default_cube_size, block_r, block_g, block_b);
+                                        heidic_set_wedge_rotation(block_index, wedge_rot_x, wedge_rot_y, wedge_rot_z);
+                                        std::cout << "Created wedge at index: " << std::endl;
                                     }
                                 }
-                                block_index = heidic_create_wedge_with_color(create_pos.x, create_pos.y, create_pos.z, default_cube_size, default_cube_size, default_cube_size, block_r, block_g, block_b);
-                                heidic_set_wedge_rotation(block_index, wedge_rot_x, wedge_rot_y, wedge_rot_z);
-                                std::cout << "Created wedge at index: " << std::endl;
                             }
                         }
                         if ((block_index >= 0)) {
@@ -1641,13 +1745,32 @@ int heidic_main() {
                 int32_t  delete_is_pressed = heidic_is_key_pressed(window, 261);
                 if ((delete_is_pressed == 1)) {
                     if ((delete_was_pressed == 0)) {
-                        if (((has_selection == 1) && (selected_cube_index >= 2))) {
-                            int32_t  cube_vector_index = heidic_float_to_int((selected_cube_index - 2));
-                            heidic_delete_cube(cube_vector_index);
-                            std::cout << "Deleted cube at index " << std::endl;
+                        if (((has_light_selection == 1) && (selected_light_id >= 0))) {
+                            heidic_delete_light(selected_light_id);
+                            std::cout << "Deleted light at index " << std::endl;
+                            std::cout << selected_light_id << std::endl;
                             std::cout << "\n" << std::endl;
-                            has_selection = 0;
-                            selected_cube_index = -1;
+                            has_light_selection = 0;
+                            selected_light_id = -1;
+                        } else {
+                            if (((has_mesh_selection == 1) && (selected_mesh_instance_id >= 0))) {
+                                heidic_delete_mesh_instance(selected_mesh_instance_id);
+                                std::cout << "Deleted mesh instance at index " << std::endl;
+                                std::cout << selected_mesh_instance_id << std::endl;
+                                std::cout << "\n" << std::endl;
+                                has_mesh_selection = 0;
+                                selected_mesh_instance_id = -1;
+                            } else {
+                                if (((has_selection == 1) && (selected_cube_index >= 2))) {
+                                    int32_t  cube_vector_index = heidic_float_to_int((selected_cube_index - 2));
+                                    heidic_delete_cube(cube_vector_index);
+                                    std::cout << "Deleted cube at index " << std::endl;
+                                    std::cout << cube_vector_index << std::endl;
+                                    std::cout << "\n" << std::endl;
+                                    has_selection = 0;
+                                    selected_cube_index = -1;
+                                }
+                            }
                         }
                         delete_was_pressed = 1;
                     }
@@ -1762,6 +1885,21 @@ int heidic_main() {
                             } else {
                                 std::cout << "Failed to load mesh or user cancelled\n" << std::endl;
                             }
+                        }
+                        heidic_imgui_end_menu();
+                    }
+                    if ((heidic_imgui_begin_menu("Window") == 1)) {
+                        if ((heidic_imgui_menu_item_toggle("Codex Of Forms", show_codex_window) == 1)) {
+                            show_codex_window = (1 - show_codex_window);
+                        }
+                        if ((heidic_imgui_menu_item_toggle("Texture Swatches", show_texture_swatches_window) == 1)) {
+                            show_texture_swatches_window = (1 - show_texture_swatches_window);
+                        }
+                        if ((heidic_imgui_menu_item_toggle("UV Editor", show_uv_editor_window) == 1)) {
+                            show_uv_editor_window = (1 - show_uv_editor_window);
+                        }
+                        if ((heidic_imgui_menu_item_toggle("Performance Info", show_performance_info_window) == 1)) {
+                            show_performance_info_window = (1 - show_performance_info_window);
                         }
                         heidic_imgui_end_menu();
                     }
@@ -2144,68 +2282,70 @@ int heidic_main() {
                     if ((build_mode == 0)) {
                         heidic_draw_cube_wireframe(debug_placement_pos.x, debug_placement_pos.y, debug_placement_pos.z, 0, 0, 0, 100, 100, 100, 1, 0, 0);
                     } else {
-                        float  wedge_rot_x = 0;
-                        float  wedge_rot_y = 0;
-                        float  wedge_rot_z = 0;
-                        if ((wedge_preview_rotation == 0)) {
-                            wedge_rot_x = 270;
-                            wedge_rot_y = 180;
-                            wedge_rot_z = 90;
-                        } else {
-                            if ((wedge_preview_rotation == 1)) {
-                                wedge_rot_x = 180;
-                                wedge_rot_y = 90;
-                                wedge_rot_z = 270;
+                        if ((build_mode == 1)) {
+                            float  wedge_rot_x = 0;
+                            float  wedge_rot_y = 0;
+                            float  wedge_rot_z = 0;
+                            if ((wedge_preview_rotation == 0)) {
+                                wedge_rot_x = 270;
+                                wedge_rot_y = 180;
+                                wedge_rot_z = 90;
                             } else {
-                                if ((wedge_preview_rotation == 2)) {
-                                    wedge_rot_x = 90;
-                                    wedge_rot_y = 270;
-                                    wedge_rot_z = 180;
+                                if ((wedge_preview_rotation == 1)) {
+                                    wedge_rot_x = 180;
+                                    wedge_rot_y = 90;
+                                    wedge_rot_z = 270;
                                 } else {
-                                    if ((wedge_preview_rotation == 3)) {
-                                        wedge_rot_x = 180;
-                                        wedge_rot_y = 0;
-                                        wedge_rot_z = 270;
+                                    if ((wedge_preview_rotation == 2)) {
+                                        wedge_rot_x = 90;
+                                        wedge_rot_y = 270;
+                                        wedge_rot_z = 180;
                                     } else {
-                                        if ((wedge_preview_rotation == 4)) {
+                                        if ((wedge_preview_rotation == 3)) {
                                             wedge_rot_x = 180;
-                                            wedge_rot_y = 180;
-                                            wedge_rot_z = 90;
+                                            wedge_rot_y = 0;
+                                            wedge_rot_z = 270;
                                         } else {
-                                            if ((wedge_preview_rotation == 5)) {
+                                            if ((wedge_preview_rotation == 4)) {
                                                 wedge_rot_x = 180;
-                                                wedge_rot_y = 90;
+                                                wedge_rot_y = 180;
                                                 wedge_rot_z = 90;
                                             } else {
-                                                if ((wedge_preview_rotation == 6)) {
+                                                if ((wedge_preview_rotation == 5)) {
                                                     wedge_rot_x = 180;
-                                                    wedge_rot_y = 270;
+                                                    wedge_rot_y = 90;
                                                     wedge_rot_z = 90;
                                                 } else {
-                                                    if ((wedge_preview_rotation == 7)) {
+                                                    if ((wedge_preview_rotation == 6)) {
                                                         wedge_rot_x = 180;
-                                                        wedge_rot_y = 0;
+                                                        wedge_rot_y = 270;
                                                         wedge_rot_z = 90;
                                                     } else {
-                                                        if ((wedge_preview_rotation == 8)) {
+                                                        if ((wedge_preview_rotation == 7)) {
                                                             wedge_rot_x = 180;
-                                                            wedge_rot_y = 90;
-                                                            wedge_rot_z = 180;
+                                                            wedge_rot_y = 0;
+                                                            wedge_rot_z = 90;
                                                         } else {
-                                                            if ((wedge_preview_rotation == 9)) {
-                                                                wedge_rot_x = 90;
-                                                                wedge_rot_y = 270;
-                                                                wedge_rot_z = 270;
+                                                            if ((wedge_preview_rotation == 8)) {
+                                                                wedge_rot_x = 180;
+                                                                wedge_rot_y = 90;
+                                                                wedge_rot_z = 180;
                                                             } else {
-                                                                if ((wedge_preview_rotation == 10)) {
+                                                                if ((wedge_preview_rotation == 9)) {
                                                                     wedge_rot_x = 90;
                                                                     wedge_rot_y = 270;
-                                                                    wedge_rot_z = 90;
+                                                                    wedge_rot_z = 270;
                                                                 } else {
-                                                                    if ((wedge_preview_rotation == 11)) {
-                                                                        wedge_rot_x = 180;
-                                                                        wedge_rot_y = 0;
-                                                                        wedge_rot_z = 180;
+                                                                    if ((wedge_preview_rotation == 10)) {
+                                                                        wedge_rot_x = 90;
+                                                                        wedge_rot_y = 270;
+                                                                        wedge_rot_z = 90;
+                                                                    } else {
+                                                                        if ((wedge_preview_rotation == 11)) {
+                                                                            wedge_rot_x = 180;
+                                                                            wedge_rot_y = 0;
+                                                                            wedge_rot_z = 180;
+                                                                        }
                                                                     }
                                                                 }
                                                             }
@@ -2217,9 +2357,21 @@ int heidic_main() {
                                     }
                                 }
                             }
+                            last_wedge_preview_rotation = wedge_preview_rotation;
+                            heidic_draw_wedge_wireframe(debug_placement_pos.x, debug_placement_pos.y, debug_placement_pos.z, wedge_rot_x, wedge_rot_y, wedge_rot_z, 100, 100, 100, 1, 0, 0);
+                        } else {
+                            if ((build_mode == 4)) {
+                                float  preview_range = 200;
+                                float  preview_dir_x = 0;
+                                float  preview_dir_y = -1;
+                                float  preview_dir_z = 0;
+                                float  preview_outer_cone = 0.785;
+                                float  preview_r = 1;
+                                float  preview_g = 1;
+                                float  preview_b = 0;
+                                heidic_draw_spot_light_cone(debug_placement_pos.x, debug_placement_pos.y, debug_placement_pos.z, preview_dir_x, preview_dir_y, preview_dir_z, preview_range, preview_outer_cone, preview_r, preview_g, preview_b);
+                            }
                         }
-                        last_wedge_preview_rotation = wedge_preview_rotation;
-                        heidic_draw_wedge_wireframe(debug_placement_pos.x, debug_placement_pos.y, debug_placement_pos.z, wedge_rot_x, wedge_rot_y, wedge_rot_z, 100, 100, 100, 1, 0, 0);
                     }
                 }
                 if ((mouse_mode == 0)) {
@@ -2460,216 +2612,312 @@ int heidic_main() {
                     }
                 }
             }
+            int32_t  mesh_instance_count = heidic_get_mesh_instance_total_count();
+            int32_t  mesh_instance_index = 0;
+            while ((mesh_instance_index < mesh_instance_count)) {
+                if ((heidic_get_mesh_instance_active(mesh_instance_index) == 1)) {
+                    std::string  function_name = heidic_get_mesh_instance_heidic_function(mesh_instance_index);
+                    if ((function_name != "")) {
+                        if ((function_name == "rotate_me")) {
+                            rotate_me(mesh_instance_index);
+                        }
+                    }
+                }
+                mesh_instance_index = (mesh_instance_index + 1);
+            }
             if ((show_debug == 1)) {
-                if ((heidic_imgui_begin("Codex Of Forms") == 1)) {
-                    int32_t  combination_count = heidic_get_combination_count();
-                    int32_t  total_cube_count = heidic_get_cube_total_count();
-                    int32_t  global_cube_display_index = 1;
-                    int32_t  combo_id = 0;
-                    while ((combo_id < combination_count)) {
-                        heidic_imgui_push_id(combo_id);
-                        int32_t  editing_id = heidic_get_editing_combination_id();
-                        int32_t  is_editing_this = 0;
-                        if ((editing_id == combo_id)) {
-                            is_editing_this = 1;
+                if ((show_codex_window == 1)) {
+                    if ((heidic_imgui_begin("Codex Of Forms") == 0)) {
+                        show_codex_window = 0;
+                    } else {
+                        int32_t  combination_count = heidic_get_combination_count();
+                        int32_t  total_cube_count = heidic_get_cube_total_count();
+                        int32_t  global_cube_display_index = 1;
+                        int32_t  combo_id = 0;
+                        while ((combo_id < combination_count)) {
+                            heidic_imgui_push_id(combo_id);
+                            int32_t  editing_id = heidic_get_editing_combination_id();
+                            int32_t  is_editing_this = 0;
+                            if ((editing_id == combo_id)) {
+                                is_editing_this = 1;
+                            }
+                            std::string  combo_name = heidic_format_combination_name(combo_id);
+                            int32_t  is_expanded = heidic_is_combination_expanded(combo_id);
+                            std::string  expand_button_text = "+";
+                            if ((is_expanded == 1)) {
+                                expand_button_text = "-";
+                            }
+                            if ((heidic_imgui_button(expand_button_text.c_str()) == 1)) {
+                                heidic_toggle_combination_expanded(combo_id);
+                            }
+                            heidic_imgui_same_line();
+                            int32_t  enter_pressed = heidic_imgui_input_text_combination_simple(combo_id);
+                            if ((is_expanded == 1)) {
+                                int32_t  cube_index = 0;
+                                while ((cube_index < total_cube_count)) {
+                                    if ((heidic_get_cube_active(cube_index) == 1)) {
+                                        if ((heidic_get_cube_combination_id(cube_index) == combo_id)) {
+                                            heidic_imgui_push_id(cube_index);
+                                            std::string  cube_name = heidic_format_cube_name_with_index(global_cube_display_index);
+                                            int32_t  ctrl_pressed = heidic_ctrl_down(window);
+                                            int32_t  is_selected = heidic_is_cube_selected(cube_index);
+                                            if ((is_selected == 1)) {
+                                                if ((heidic_imgui_selectable_colored(cube_name.c_str(), 1, 1, 0, 1) == 1)) {
+                                                    if ((ctrl_pressed == 1)) {
+                                                        heidic_remove_from_selection(cube_index);
+                                                        int32_t  selection_count = heidic_get_selection_count();
+                                                        if ((selection_count == 0)) {
+                                                            has_selection = 0;
+                                                            selected_cube_index = -1;
+                                                        } else {
+                                                            int32_t  find_index = 0;
+                                                            int32_t  total_cubes_find = heidic_get_cube_total_count();
+                                                            int32_t  found_first = 0;
+                                                            while (((find_index < total_cubes_find) && (found_first == 0))) {
+                                                                if ((heidic_get_cube_active(find_index) == 1)) {
+                                                                    if ((heidic_is_cube_selected(find_index) == 1)) {
+                                                                        float  cube_index_f = heidic_int_to_float(find_index);
+                                                                        selected_cube_index = (cube_index_f + 2);
+                                                                        selected_cube_x = heidic_get_cube_x(find_index);
+                                                                        selected_cube_y = heidic_get_cube_y(find_index);
+                                                                        selected_cube_z = heidic_get_cube_z(find_index);
+                                                                        selected_cube_sx = heidic_get_cube_sx(find_index);
+                                                                        selected_cube_sy = heidic_get_cube_sy(find_index);
+                                                                        selected_cube_sz = heidic_get_cube_sz(find_index);
+                                                                        has_selection = 1;
+                                                                        found_first = 1;
+                                                                    }
+                                                                }
+                                                                find_index = (find_index + 1);
+                                                            }
+                                                        }
+                                                    } else {
+                                                    }
+                                                }
+                                            } else {
+                                                if ((heidic_imgui_selectable_colored(cube_name.c_str(), 1, 0, 0, 1) == 1)) {
+                                                    if ((ctrl_pressed == 1)) {
+                                                        heidic_add_to_selection(cube_index);
+                                                    } else {
+                                                        heidic_clear_selection();
+                                                        heidic_add_to_selection(cube_index);
+                                                    }
+                                                    float  cube_index_f = heidic_int_to_float(cube_index);
+                                                    selected_cube_index = (cube_index_f + 2);
+                                                    selected_cube_x = heidic_get_cube_x(cube_index);
+                                                    selected_cube_y = heidic_get_cube_y(cube_index);
+                                                    selected_cube_z = heidic_get_cube_z(cube_index);
+                                                    selected_cube_sx = heidic_get_cube_sx(cube_index);
+                                                    selected_cube_sy = heidic_get_cube_sy(cube_index);
+                                                    selected_cube_sz = heidic_get_cube_sz(cube_index);
+                                                    has_selection = 1;
+                                                }
+                                            }
+                                            heidic_imgui_pop_id();
+                                            global_cube_display_index = (global_cube_display_index + 1);
+                                        }
+                                    }
+                                    cube_index = (cube_index + 1);
+                                }
+                            } else {
+                                int32_t  cube_index = 0;
+                                while ((cube_index < total_cube_count)) {
+                                    if ((heidic_get_cube_active(cube_index) == 1)) {
+                                        if ((heidic_get_cube_combination_id(cube_index) == combo_id)) {
+                                            global_cube_display_index = (global_cube_display_index + 1);
+                                        }
+                                    }
+                                    cube_index = (cube_index + 1);
+                                }
+                            }
+                            heidic_imgui_pop_id();
+                            combo_id = (combo_id + 1);
                         }
-                        std::string  combo_name = heidic_format_combination_name(combo_id);
-                        int32_t  is_expanded = heidic_is_combination_expanded(combo_id);
-                        std::string  expand_button_text = "+";
-                        if ((is_expanded == 1)) {
-                            expand_button_text = "-";
-                        }
-                        if ((heidic_imgui_button(expand_button_text.c_str()) == 1)) {
-                            heidic_toggle_combination_expanded(combo_id);
-                        }
-                        heidic_imgui_same_line();
-                        int32_t  enter_pressed = heidic_imgui_input_text_combination_simple(combo_id);
-                        if ((is_expanded == 1)) {
-                            int32_t  cube_index = 0;
-                            while ((cube_index < total_cube_count)) {
-                                if ((heidic_get_cube_active(cube_index) == 1)) {
-                                    if ((heidic_get_cube_combination_id(cube_index) == combo_id)) {
-                                        heidic_imgui_push_id(cube_index);
-                                        std::string  cube_name = heidic_format_cube_name_with_index(global_cube_display_index);
-                                        if ((heidic_is_cube_selected(cube_index) == 1)) {
-                                            heidic_imgui_text_bold(cube_name.c_str());
-                                        } else {
-                                            if ((heidic_imgui_selectable_colored(cube_name.c_str(), 1, 0, 0, 1) == 1)) {
-                                                heidic_clear_selection();
-                                                heidic_add_to_selection(cube_index);
-                                                float  cube_index_f = heidic_int_to_float(cube_index);
-                                                selected_cube_index = (cube_index_f + 2);
-                                                selected_cube_x = heidic_get_cube_x(cube_index);
-                                                selected_cube_y = heidic_get_cube_y(cube_index);
-                                                selected_cube_z = heidic_get_cube_z(cube_index);
-                                                selected_cube_sx = heidic_get_cube_sx(cube_index);
-                                                selected_cube_sy = heidic_get_cube_sy(cube_index);
-                                                selected_cube_sz = heidic_get_cube_sz(cube_index);
-                                                has_selection = 1;
+                        int32_t  cube_index = 0;
+                        while ((cube_index < total_cube_count)) {
+                            if ((heidic_get_cube_active(cube_index) == 1)) {
+                                if ((heidic_get_cube_combination_id(cube_index) == -1)) {
+                                    heidic_imgui_push_id(cube_index);
+                                    std::string  cube_name = heidic_format_cube_name_with_index(global_cube_display_index);
+                                    int32_t  ctrl_pressed = heidic_ctrl_down(window);
+                                    int32_t  is_selected = heidic_is_cube_selected(cube_index);
+                                    if ((is_selected == 1)) {
+                                        if ((heidic_imgui_selectable_colored(cube_name.c_str(), 1, 1, 0, 1) == 1)) {
+                                            if ((ctrl_pressed == 1)) {
+                                                heidic_remove_from_selection(cube_index);
+                                                int32_t  selection_count = heidic_get_selection_count();
+                                                if ((selection_count == 0)) {
+                                                    has_selection = 0;
+                                                    selected_cube_index = -1;
+                                                } else {
+                                                    int32_t  find_index = 0;
+                                                    int32_t  total_cubes_find = heidic_get_cube_total_count();
+                                                    int32_t  found_first = 0;
+                                                    while (((find_index < total_cubes_find) && (found_first == 0))) {
+                                                        if ((heidic_get_cube_active(find_index) == 1)) {
+                                                            if ((heidic_is_cube_selected(find_index) == 1)) {
+                                                                float  cube_index_f = heidic_int_to_float(find_index);
+                                                                selected_cube_index = (cube_index_f + 2);
+                                                                selected_cube_x = heidic_get_cube_x(find_index);
+                                                                selected_cube_y = heidic_get_cube_y(find_index);
+                                                                selected_cube_z = heidic_get_cube_z(find_index);
+                                                                selected_cube_sx = heidic_get_cube_sx(find_index);
+                                                                selected_cube_sy = heidic_get_cube_sy(find_index);
+                                                                selected_cube_sz = heidic_get_cube_sz(find_index);
+                                                                has_selection = 1;
+                                                                found_first = 1;
+                                                            }
+                                                        }
+                                                        find_index = (find_index + 1);
+                                                    }
+                                                }
+                                            } else {
                                             }
                                         }
-                                        heidic_imgui_pop_id();
-                                        global_cube_display_index = (global_cube_display_index + 1);
+                                    } else {
+                                        int32_t  ctrl_pressed = heidic_ctrl_down(window);
+                                        if ((heidic_imgui_selectable_str(cube_name.c_str()) == 1)) {
+                                            if ((ctrl_pressed == 1)) {
+                                                heidic_add_to_selection(cube_index);
+                                            } else {
+                                                heidic_clear_selection();
+                                                heidic_add_to_selection(cube_index);
+                                            }
+                                            float  cube_index_f = heidic_int_to_float(cube_index);
+                                            selected_cube_index = (cube_index_f + 2);
+                                            selected_cube_x = heidic_get_cube_x(cube_index);
+                                            selected_cube_y = heidic_get_cube_y(cube_index);
+                                            selected_cube_z = heidic_get_cube_z(cube_index);
+                                            selected_cube_sx = heidic_get_cube_sx(cube_index);
+                                            selected_cube_sy = heidic_get_cube_sy(cube_index);
+                                            selected_cube_sz = heidic_get_cube_sz(cube_index);
+                                            has_selection = 1;
+                                        }
                                     }
+                                    heidic_imgui_pop_id();
+                                    global_cube_display_index = (global_cube_display_index + 1);
                                 }
-                                cube_index = (cube_index + 1);
                             }
-                        } else {
-                            int32_t  cube_index = 0;
-                            while ((cube_index < total_cube_count)) {
-                                if ((heidic_get_cube_active(cube_index) == 1)) {
-                                    if ((heidic_get_cube_combination_id(cube_index) == combo_id)) {
-                                        global_cube_display_index = (global_cube_display_index + 1);
-                                    }
-                                }
-                                cube_index = (cube_index + 1);
-                            }
+                            cube_index = (cube_index + 1);
                         }
-                        heidic_imgui_pop_id();
-                        combo_id = (combo_id + 1);
-                    }
-                    int32_t  cube_index = 0;
-                    while ((cube_index < total_cube_count)) {
-                        if ((heidic_get_cube_active(cube_index) == 1)) {
-                            if ((heidic_get_cube_combination_id(cube_index) == -1)) {
-                                heidic_imgui_push_id(cube_index);
-                                std::string  cube_name = heidic_format_cube_name_with_index(global_cube_display_index);
-                                if ((heidic_is_cube_selected(cube_index) == 1)) {
-                                    heidic_imgui_text_bold(cube_name.c_str());
-                                } else {
-                                    if ((heidic_imgui_selectable_str(cube_name.c_str()) == 1)) {
-                                        heidic_clear_selection();
-                                        heidic_add_to_selection(cube_index);
-                                        float  cube_index_f = heidic_int_to_float(cube_index);
-                                        selected_cube_index = (cube_index_f + 2);
-                                        selected_cube_x = heidic_get_cube_x(cube_index);
-                                        selected_cube_y = heidic_get_cube_y(cube_index);
-                                        selected_cube_z = heidic_get_cube_z(cube_index);
-                                        selected_cube_sx = heidic_get_cube_sx(cube_index);
-                                        selected_cube_sy = heidic_get_cube_sy(cube_index);
-                                        selected_cube_sz = heidic_get_cube_sz(cube_index);
-                                        has_selection = 1;
-                                    }
-                                }
-                                heidic_imgui_pop_id();
-                                global_cube_display_index = (global_cube_display_index + 1);
-                            }
-                        }
-                        cube_index = (cube_index + 1);
-                    }
-                    int32_t  mesh_instance_count = heidic_get_mesh_instance_total_count();
-                    if ((mesh_instance_count > 0)) {
-                        heidic_imgui_separator();
-                        heidic_imgui_text("Meshes:");
-                        int32_t  mesh_instance_index = 0;
-                        while ((mesh_instance_index < mesh_instance_count)) {
-                            if ((heidic_get_mesh_instance_active(mesh_instance_index) == 1)) {
-                                heidic_imgui_push_id((mesh_instance_index + 10000));
-                                std::string  mesh_name = heidic_format_mesh_name(mesh_instance_index);
-                                int32_t  is_mesh_selected = heidic_is_mesh_selected(mesh_instance_index);
-                                if ((heidic_imgui_selectable_str(mesh_name.c_str()) == 1)) {
+                        int32_t  mesh_instance_count = heidic_get_mesh_instance_total_count();
+                        if ((mesh_instance_count > 0)) {
+                            heidic_imgui_separator();
+                            heidic_imgui_text("Meshes:");
+                            int32_t  mesh_instance_index = 0;
+                            while ((mesh_instance_index < mesh_instance_count)) {
+                                if ((heidic_get_mesh_instance_active(mesh_instance_index) == 1)) {
+                                    heidic_imgui_push_id((mesh_instance_index + 10000));
+                                    std::string  mesh_name = heidic_format_mesh_name(mesh_instance_index);
+                                    int32_t  is_mesh_selected = heidic_is_mesh_selected(mesh_instance_index);
                                     if ((is_mesh_selected == 1)) {
-                                        heidic_clear_mesh_selection();
-                                        has_mesh_selection = 0;
-                                        selected_mesh_instance_id = -1;
+                                        if ((heidic_imgui_selectable_colored(mesh_name.c_str(), 0.8, 0.7, 0.5, 1) == 1)) {
+                                            heidic_clear_mesh_selection();
+                                            has_mesh_selection = 0;
+                                            selected_mesh_instance_id = -1;
+                                        }
                                     } else {
-                                        heidic_clear_selection();
-                                        heidic_clear_mesh_selection();
-                                        heidic_add_mesh_to_selection(mesh_instance_index);
-                                        selected_mesh_instance_id = mesh_instance_index;
-                                        selected_mesh_x = heidic_get_mesh_instance_x(mesh_instance_index);
-                                        selected_mesh_y = heidic_get_mesh_instance_y(mesh_instance_index);
-                                        selected_mesh_z = heidic_get_mesh_instance_z(mesh_instance_index);
-                                        has_mesh_selection = 1;
-                                        has_selection = 0;
-                                        selected_cube_index = -1;
+                                        if ((heidic_imgui_selectable_str(mesh_name.c_str()) == 1)) {
+                                            heidic_clear_selection();
+                                            heidic_clear_mesh_selection();
+                                            heidic_add_mesh_to_selection(mesh_instance_index);
+                                            selected_mesh_instance_id = mesh_instance_index;
+                                            selected_mesh_x = heidic_get_mesh_instance_x(mesh_instance_index);
+                                            selected_mesh_y = heidic_get_mesh_instance_y(mesh_instance_index);
+                                            selected_mesh_z = heidic_get_mesh_instance_z(mesh_instance_index);
+                                            has_mesh_selection = 1;
+                                            has_selection = 0;
+                                            selected_cube_index = -1;
+                                        }
                                     }
+                                    heidic_imgui_pop_id();
                                 }
-                                heidic_imgui_pop_id();
+                                mesh_instance_index = (mesh_instance_index + 1);
                             }
-                            mesh_instance_index = (mesh_instance_index + 1);
                         }
-                    }
-                    int32_t  wedge_total_count = heidic_get_wedge_total_count();
-                    if ((wedge_total_count > 0)) {
-                        heidic_imgui_separator();
-                        heidic_imgui_text("Wedges:");
-                        int32_t  wedge_index = 0;
-                        while ((wedge_index < wedge_total_count)) {
-                            if ((heidic_get_wedge_active(wedge_index) == 1)) {
-                                heidic_imgui_push_id((wedge_index + 20000));
-                                std::string  wedge_name = heidic_format_wedge_name(wedge_index);
-                                int32_t  is_wedge_selected = 0;
-                                if (((has_wedge_selection == 1) && (selected_wedge_index == wedge_index))) {
-                                    is_wedge_selected = 1;
-                                }
-                                if ((is_wedge_selected == 1)) {
-                                    heidic_imgui_text_bold(wedge_name.c_str());
-                                } else {
-                                    if ((heidic_imgui_selectable_str(wedge_name.c_str()) == 1)) {
-                                        heidic_clear_selection();
-                                        heidic_clear_mesh_selection();
-                                        selected_wedge_index = wedge_index;
-                                        selected_wedge_x = heidic_get_wedge_x(wedge_index);
-                                        selected_wedge_y = heidic_get_wedge_y(wedge_index);
-                                        selected_wedge_z = heidic_get_wedge_z(wedge_index);
-                                        selected_wedge_sx = heidic_get_wedge_sx(wedge_index);
-                                        selected_wedge_sy = heidic_get_wedge_sy(wedge_index);
-                                        selected_wedge_sz = heidic_get_wedge_sz(wedge_index);
-                                        has_wedge_selection = 1;
-                                        has_selection = 0;
-                                        has_mesh_selection = 0;
-                                        selected_cube_index = -1;
-                                        selected_mesh_instance_id = -1;
+                        int32_t  wedge_total_count = heidic_get_wedge_total_count();
+                        if ((wedge_total_count > 0)) {
+                            heidic_imgui_separator();
+                            heidic_imgui_text("Wedges:");
+                            int32_t  wedge_index = 0;
+                            while ((wedge_index < wedge_total_count)) {
+                                if ((heidic_get_wedge_active(wedge_index) == 1)) {
+                                    heidic_imgui_push_id((wedge_index + 20000));
+                                    std::string  wedge_name = heidic_format_wedge_name(wedge_index);
+                                    int32_t  is_wedge_selected = 0;
+                                    if (((has_wedge_selection == 1) && (selected_wedge_index == wedge_index))) {
+                                        is_wedge_selected = 1;
                                     }
+                                    if ((is_wedge_selected == 1)) {
+                                        heidic_imgui_text_bold(wedge_name.c_str());
+                                    } else {
+                                        if ((heidic_imgui_selectable_str(wedge_name.c_str()) == 1)) {
+                                            heidic_clear_selection();
+                                            heidic_clear_mesh_selection();
+                                            selected_wedge_index = wedge_index;
+                                            selected_wedge_x = heidic_get_wedge_x(wedge_index);
+                                            selected_wedge_y = heidic_get_wedge_y(wedge_index);
+                                            selected_wedge_z = heidic_get_wedge_z(wedge_index);
+                                            selected_wedge_sx = heidic_get_wedge_sx(wedge_index);
+                                            selected_wedge_sy = heidic_get_wedge_sy(wedge_index);
+                                            selected_wedge_sz = heidic_get_wedge_sz(wedge_index);
+                                            has_wedge_selection = 1;
+                                            has_selection = 0;
+                                            has_mesh_selection = 0;
+                                            selected_cube_index = -1;
+                                            selected_mesh_instance_id = -1;
+                                        }
+                                    }
+                                    heidic_imgui_pop_id();
                                 }
-                                heidic_imgui_pop_id();
+                                wedge_index = (wedge_index + 1);
                             }
-                            wedge_index = (wedge_index + 1);
                         }
-                    }
-                    int32_t  light_total_count = heidic_get_directional_light_total_count();
-                    if ((light_total_count > 0)) {
-                        heidic_imgui_separator();
-                        heidic_imgui_text("Lights:");
-                        int32_t  light_index = 0;
-                        while ((light_index < light_total_count)) {
-                            if ((heidic_get_directional_light_active(light_index) == 1)) {
-                                heidic_imgui_push_id((light_index + 30000));
-                                std::string  light_name = heidic_format_light_name(light_index);
-                                int32_t  is_light_selected = heidic_is_light_selected(light_index);
-                                if ((heidic_imgui_selectable_str(light_name.c_str()) == 1)) {
+                        int32_t  light_total_count = heidic_get_directional_light_total_count();
+                        if ((light_total_count > 0)) {
+                            heidic_imgui_separator();
+                            heidic_imgui_text("Lights:");
+                            int32_t  light_index = 0;
+                            while ((light_index < light_total_count)) {
+                                if ((heidic_get_directional_light_active(light_index) == 1)) {
+                                    heidic_imgui_push_id((light_index + 30000));
+                                    std::string  light_name = heidic_format_light_name(light_index);
+                                    int32_t  is_light_selected = heidic_is_light_selected(light_index);
                                     if ((is_light_selected == 1)) {
-                                        heidic_clear_light_selection();
-                                        has_light_selection = 0;
-                                        selected_light_id = -1;
+                                        if ((heidic_imgui_selectable_colored(light_name.c_str(), 0.8, 0.7, 0.5, 1) == 1)) {
+                                            heidic_clear_light_selection();
+                                            has_light_selection = 0;
+                                            selected_light_id = -1;
+                                        }
                                     } else {
-                                        heidic_clear_selection();
-                                        heidic_clear_mesh_selection();
-                                        selected_wedge_index = -1;
-                                        heidic_clear_light_selection();
-                                        heidic_add_light_to_selection(light_index);
-                                        selected_light_id = light_index;
-                                        selected_light_x = heidic_get_directional_light_x(light_index);
-                                        selected_light_y = heidic_get_directional_light_y(light_index);
-                                        selected_light_z = heidic_get_directional_light_z(light_index);
-                                        selected_light_dir_x = heidic_get_directional_light_dir_x(light_index);
-                                        selected_light_dir_y = heidic_get_directional_light_dir_y(light_index);
-                                        selected_light_dir_z = heidic_get_directional_light_dir_z(light_index);
-                                        has_light_selection = 1;
-                                        has_selection = 0;
-                                        has_mesh_selection = 0;
-                                        has_wedge_selection = 0;
-                                        selected_cube_index = -1;
-                                        selected_mesh_instance_id = -1;
+                                        if ((heidic_imgui_selectable_str(light_name.c_str()) == 1)) {
+                                            heidic_clear_selection();
+                                            heidic_clear_mesh_selection();
+                                            selected_wedge_index = -1;
+                                            heidic_clear_light_selection();
+                                            heidic_add_light_to_selection(light_index);
+                                            selected_light_id = light_index;
+                                            selected_light_x = heidic_get_directional_light_x(light_index);
+                                            selected_light_y = heidic_get_directional_light_y(light_index);
+                                            selected_light_z = heidic_get_directional_light_z(light_index);
+                                            selected_light_dir_x = heidic_get_directional_light_dir_x(light_index);
+                                            selected_light_dir_y = heidic_get_directional_light_dir_y(light_index);
+                                            selected_light_dir_z = heidic_get_directional_light_dir_z(light_index);
+                                            has_light_selection = 1;
+                                            has_selection = 0;
+                                            has_mesh_selection = 0;
+                                            has_wedge_selection = 0;
+                                            selected_cube_index = -1;
+                                            selected_mesh_instance_id = -1;
+                                        }
                                     }
+                                    heidic_imgui_pop_id();
                                 }
-                                heidic_imgui_pop_id();
+                                light_index = (light_index + 1);
                             }
-                            light_index = (light_index + 1);
                         }
+                        heidic_imgui_end();
                     }
-                    heidic_imgui_end();
                 }
                 if ((build_mode == 1)) {
                     if ((heidic_imgui_begin("Wedge Rotation Position") == 1)) {
@@ -2770,7 +3018,7 @@ int heidic_main() {
                     }
                 }
                 if (((has_wedge_selection == 1) && (selected_wedge_index >= 0))) {
-                    if ((heidic_imgui_begin("Transform Control") == 1)) {
+                    if ((heidic_imgui_begin("Properties") == 1)) {
                         float  current_x = heidic_get_wedge_x(selected_wedge_index);
                         float  current_y = heidic_get_wedge_y(selected_wedge_index);
                         float  current_z = heidic_get_wedge_z(selected_wedge_index);
@@ -2870,7 +3118,7 @@ int heidic_main() {
                     }
                 }
                 if (((has_light_selection == 1) && (selected_light_id >= 0))) {
-                    if ((heidic_imgui_begin("Transform Control") == 1)) {
+                    if ((heidic_imgui_begin("Properties") == 1)) {
                         float  current_x = heidic_get_directional_light_x(selected_light_id);
                         float  current_y = heidic_get_directional_light_y(selected_light_id);
                         float  current_z = heidic_get_directional_light_z(selected_light_id);
@@ -2987,11 +3235,26 @@ int heidic_main() {
                             }
                             heidic_set_directional_light_intensity(selected_light_id, new_intensity);
                         }
+                        heidic_imgui_separator();
+                        heidic_imgui_text("Range:");
+                        float  current_range = heidic_get_light_range(selected_light_id);
+                        float  new_range_slider = heidic_imgui_slider_float("Range", current_range, 0, 5000);
+                        float  new_range_input = heidic_imgui_input_float("##LightRange", current_range, 10, 100);
+                        float  new_range = new_range_slider;
+                        if ((new_range_input != current_range)) {
+                            new_range = new_range_input;
+                        }
+                        if ((new_range != current_range)) {
+                            if ((new_range < 0)) {
+                                new_range = 0;
+                            }
+                            heidic_set_light_range(selected_light_id, new_range);
+                        }
                         heidic_imgui_end();
                     }
                 }
                 if (((has_mesh_selection == 1) && (selected_mesh_instance_id >= 0))) {
-                    if ((heidic_imgui_begin("Transform Control") == 1)) {
+                    if ((heidic_imgui_begin("Properties") == 1)) {
                         float  current_x = heidic_get_mesh_instance_x(selected_mesh_instance_id);
                         float  current_y = heidic_get_mesh_instance_y(selected_mesh_instance_id);
                         float  current_z = heidic_get_mesh_instance_z(selected_mesh_instance_id);
@@ -3088,23 +3351,23 @@ int heidic_main() {
                             heidic_set_mesh_instance_rotation(selected_mesh_instance_id, current_rx, current_ry, new_rz);
                         }
                         heidic_imgui_separator();
-                        heidic_imgui_text("Texture:");
-                        int32_t  texture_input_result = heidic_imgui_input_text_mesh_texture(selected_mesh_instance_id);
-                        if ((texture_input_result == 1)) {
-                            std::cout << "Texture applied successfully\n" << std::endl;
+                        heidic_imgui_text("Heidic Function:");
+                        int32_t  function_input_result = heidic_imgui_input_text_mesh_heidic_function(selected_mesh_instance_id);
+                        if ((function_input_result == 1)) {
+                            std::cout << "HEIDIC function applied successfully\n" << std::endl;
                         }
                         heidic_imgui_same_line();
                         if ((heidic_imgui_button("Apply") == 1)) {
-                            std::string  texture_path = heidic_get_mesh_texture_input_buffer(selected_mesh_instance_id);
-                            if ((texture_path != "")) {
-                                int32_t  result = heidic_set_mesh_instance_texture(selected_mesh_instance_id, texture_path.c_str());
+                            std::string  function_name = heidic_get_mesh_heidic_function_input_buffer(selected_mesh_instance_id);
+                            if ((function_name != "")) {
+                                int32_t  result = heidic_set_mesh_instance_heidic_function(selected_mesh_instance_id, function_name.c_str());
                                 if ((result == 1)) {
-                                    std::cout << "Texture applied successfully: " << std::endl;
-                                    std::cout << texture_path << std::endl;
+                                    std::cout << "HEIDIC function applied successfully: " << std::endl;
+                                    std::cout << function_name << std::endl;
                                     std::cout << "\n" << std::endl;
                                 } else {
-                                    std::cout << "Failed to apply texture: " << std::endl;
-                                    std::cout << texture_path << std::endl;
+                                    std::cout << "Failed to apply HEIDIC function: " << std::endl;
+                                    std::cout << function_name << std::endl;
                                     std::cout << "\n" << std::endl;
                                 }
                             }
@@ -3115,7 +3378,7 @@ int heidic_main() {
                 if (((has_selection == 1) && (selected_cube_index >= 2))) {
                     int32_t  cube_storage_index = heidic_float_to_int((selected_cube_index - 2));
                     if ((heidic_get_cube_active(cube_storage_index) == 1)) {
-                        if ((heidic_imgui_begin("Transform Control") == 1)) {
+                        if ((heidic_imgui_begin("Properties") == 1)) {
                             float  current_x = heidic_get_cube_x(cube_storage_index);
                             float  current_y = heidic_get_cube_y(cube_storage_index);
                             float  current_z = heidic_get_cube_z(cube_storage_index);
@@ -3212,137 +3475,105 @@ int heidic_main() {
                         }
                     }
                 }
-                if ((heidic_imgui_begin("Texture Swatches") == 1)) {
-                    heidic_load_texture_list();
-                    int32_t  texture_count = heidic_get_texture_count();
-                    int32_t  texture_index = 0;
-                    int32_t  items_per_row = 6;
-                    int32_t  current_col = 0;
-                    float  swatch_size = 64;
-                    while ((texture_index < texture_count)) {
-                        std::string  texture_name = heidic_get_texture_name(texture_index);
-                        int64_t  texture_id = heidic_get_texture_preview_id(texture_name.c_str());
-                        heidic_imgui_push_id(texture_index);
-                        std::string  selected_texture = heidic_get_selected_texture();
-                        int32_t  is_selected = 0;
-                        if ((selected_texture == texture_name)) {
-                            is_selected = 1;
-                        }
-                        if ((texture_id != 0)) {
-                            float  tint_r = 1;
-                            float  tint_g = 1;
-                            float  tint_b = 1;
-                            float  tint_a = 1;
-                            if ((is_selected == 1)) {
-                                tint_r = 1;
-                                tint_g = 1;
-                                tint_b = 0.5;
+                if ((show_texture_swatches_window == 1)) {
+                    if ((heidic_imgui_begin("Texture Swatches") == 0)) {
+                        show_texture_swatches_window = 0;
+                    } else {
+                        heidic_load_texture_list();
+                        int32_t  texture_count = heidic_get_texture_count();
+                        int32_t  texture_index = 0;
+                        int32_t  items_per_row = 6;
+                        int32_t  current_col = 0;
+                        float  swatch_size = 64;
+                        while ((texture_index < texture_count)) {
+                            std::string  texture_name = heidic_get_texture_name(texture_index);
+                            int64_t  texture_id = heidic_get_texture_preview_id(texture_name.c_str());
+                            heidic_imgui_push_id(texture_index);
+                            std::string  selected_texture = heidic_get_selected_texture();
+                            int32_t  is_selected = 0;
+                            if ((selected_texture == texture_name)) {
+                                is_selected = 1;
                             }
-                            std::string  button_id = texture_name;
-                            if ((heidic_imgui_image_button(button_id.c_str(), texture_id, swatch_size, swatch_size, tint_r, tint_g, tint_b, tint_a) == 1)) {
-                                heidic_set_selected_texture(texture_name.c_str());
-                            }
-                        } else {
-                            heidic_imgui_text_str_wrapper(texture_name.c_str());
-                        }
-                        heidic_imgui_pop_id();
-                        current_col = (current_col + 1);
-                        if ((current_col < items_per_row)) {
-                            heidic_imgui_same_line();
-                        } else {
-                            current_col = 0;
-                        }
-                        texture_index = (texture_index + 1);
-                    }
-                    heidic_imgui_end();
-                }
-                if ((heidic_imgui_begin("Material Textures") == 1)) {
-                    int32_t  mesh_count = heidic_get_mesh_count();
-                    if ((mesh_count > 0)) {
-                        int32_t  mesh_index = 0;
-                        while ((mesh_index < mesh_count)) {
-                            int32_t  mesh_id = heidic_get_mesh_id(mesh_index);
-                            int32_t  material_texture_count = heidic_get_mesh_material_texture_count(mesh_id);
-                            if ((material_texture_count > 0)) {
-                                std::string  mesh_id_str = "";
-                                std::string  count_str = "";
-                                heidic_imgui_text("Loaded Material Textures:");
-                                int32_t  mat_tex_index = 0;
-                                int32_t  items_per_row = 2;
-                                int32_t  current_col = 0;
-                                float  swatch_size = 256;
-                                while ((mat_tex_index < material_texture_count)) {
-                                    std::string  texture_path = heidic_get_mesh_material_texture_path(mesh_id, mat_tex_index);
-                                    int64_t  texture_id = heidic_get_mesh_material_texture_preview(mesh_id, texture_path.c_str());
-                                    if ((texture_id != 0)) {
-                                        std::string  button_id = texture_path;
-                                        heidic_imgui_image_button(button_id.c_str(), texture_id, swatch_size, swatch_size, 1, 1, 1, 1);
-                                        heidic_imgui_text_str_wrapper(texture_path.c_str());
-                                    } else {
-                                        heidic_imgui_text_str_wrapper(texture_path.c_str());
-                                        heidic_imgui_same_line();
-                                        heidic_imgui_text("(failed to load)");
-                                    }
-                                    current_col = (current_col + 1);
-                                    if ((current_col < items_per_row)) {
-                                        heidic_imgui_same_line();
-                                    } else {
-                                        current_col = 0;
-                                    }
-                                    mat_tex_index = (mat_tex_index + 1);
+                            if ((texture_id != 0)) {
+                                float  tint_r = 1;
+                                float  tint_g = 1;
+                                float  tint_b = 1;
+                                float  tint_a = 1;
+                                if ((is_selected == 1)) {
+                                    tint_r = 1;
+                                    tint_g = 1;
+                                    tint_b = 0.5;
                                 }
-                                heidic_imgui_separator();
+                                std::string  button_id = texture_name;
+                                if ((heidic_imgui_image_button(button_id.c_str(), texture_id, swatch_size, swatch_size, tint_r, tint_g, tint_b, tint_a) == 1)) {
+                                    heidic_set_selected_texture(texture_name.c_str());
+                                }
+                            } else {
+                                heidic_imgui_text_str_wrapper(texture_name.c_str());
                             }
-                            mesh_index = (mesh_index + 1);
+                            heidic_imgui_pop_id();
+                            current_col = (current_col + 1);
+                            if ((current_col < items_per_row)) {
+                                heidic_imgui_same_line();
+                            } else {
+                                current_col = 0;
+                            }
+                            texture_index = (texture_index + 1);
                         }
-                    } else {
-                        heidic_imgui_text("No meshes loaded");
+                        heidic_imgui_end();
                     }
-                    heidic_imgui_end();
                 }
-                if ((heidic_imgui_begin("UV Editor") == 1)) {
-                    int32_t  mesh_count = heidic_get_mesh_count();
-                    if ((mesh_count > 0)) {
-                        int32_t  mesh_index = 0;
-                        while ((mesh_index < mesh_count)) {
-                            int32_t  mesh_id = heidic_get_mesh_id(mesh_index);
-                            heidic_imgui_text("Mesh ID: ");
-                            heidic_imgui_same_line();
-                            heidic_imgui_text_int(mesh_id);
-                            heidic_imgui_text("Tip: Only materials with 'Diffuse' textures are rendered.");
-                            heidic_imgui_text("Bright shells = will render, Dim shells = skipped (non-diffuse)");
-                            heidic_draw_uv_layout(mesh_id);
-                            heidic_imgui_separator();
-                            mesh_index = (mesh_index + 1);
+                if ((show_uv_editor_window == 1)) {
+                    if ((heidic_imgui_begin("UV Editor") == 0)) {
+                        show_uv_editor_window = 0;
+                    } else {
+                        int32_t  mesh_count = heidic_get_mesh_count();
+                        if ((mesh_count > 0)) {
+                            int32_t  mesh_index = 0;
+                            while ((mesh_index < mesh_count)) {
+                                int32_t  mesh_id = heidic_get_mesh_id(mesh_index);
+                                heidic_imgui_text("Mesh ID: ");
+                                heidic_imgui_same_line();
+                                heidic_imgui_text_int(mesh_id);
+                                heidic_imgui_text("Tip: Only materials with 'Diffuse' textures are rendered.");
+                                heidic_imgui_text("Bright shells = will render, Dim shells = skipped (non-diffuse)");
+                                heidic_draw_uv_layout(mesh_id);
+                                heidic_imgui_separator();
+                                mesh_index = (mesh_index + 1);
+                            }
+                        } else {
+                            heidic_imgui_text("No meshes loaded");
                         }
-                    } else {
-                        heidic_imgui_text("No meshes loaded");
+                        heidic_imgui_end();
                     }
-                    heidic_imgui_end();
                 }
-                if ((heidic_imgui_begin("Performance Info") == 1)) {
-                    float  fps = heidic_get_fps();
-                    float  frame_time = heidic_get_frame_time();
-                    int32_t  polygon_count = heidic_get_total_polygon_count();
-                    float  texture_memory = heidic_get_texture_memory_mb();
-                    heidic_imgui_text("FPS: ");
-                    heidic_imgui_same_line();
-                    heidic_imgui_text_float("", fps);
-                    heidic_imgui_text("Frame Time: ");
-                    heidic_imgui_same_line();
-                    heidic_imgui_text_float("", frame_time);
-                    heidic_imgui_same_line();
-                    heidic_imgui_text(" ms");
-                    heidic_imgui_separator();
-                    heidic_imgui_text("Polygons: ");
-                    heidic_imgui_same_line();
-                    heidic_imgui_text_int(polygon_count);
-                    heidic_imgui_text("Texture Memory: ");
-                    heidic_imgui_same_line();
-                    heidic_imgui_text_float("", texture_memory);
-                    heidic_imgui_same_line();
-                    heidic_imgui_text(" MB");
-                    heidic_imgui_end();
+                if ((show_performance_info_window == 1)) {
+                    if ((heidic_imgui_begin("Performance Info") == 0)) {
+                        show_performance_info_window = 0;
+                    } else {
+                        float  fps = heidic_get_fps();
+                        float  frame_time = heidic_get_frame_time();
+                        int32_t  polygon_count = heidic_get_total_polygon_count();
+                        float  texture_memory = heidic_get_texture_memory_mb();
+                        heidic_imgui_text("FPS: ");
+                        heidic_imgui_same_line();
+                        heidic_imgui_text_float("", fps);
+                        heidic_imgui_text("Frame Time: ");
+                        heidic_imgui_same_line();
+                        heidic_imgui_text_float("", frame_time);
+                        heidic_imgui_same_line();
+                        heidic_imgui_text(" ms");
+                        heidic_imgui_separator();
+                        heidic_imgui_text("Polygons: ");
+                        heidic_imgui_same_line();
+                        heidic_imgui_text_int(polygon_count);
+                        heidic_imgui_text("Texture Memory: ");
+                        heidic_imgui_same_line();
+                        heidic_imgui_text_float("", texture_memory);
+                        heidic_imgui_same_line();
+                        heidic_imgui_text(" MB");
+                        heidic_imgui_end();
+                    }
                 }
             }
             float  ground_check_distance = 200;
